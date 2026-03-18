@@ -19,7 +19,7 @@ This image is built for people who want a small local tool instead of a scraping
 ## What Runs Inside The Container
 
 - A Node.js HTTP service on port `3000`
-- A V2EX-style local control panel with tabs for Resolve, Telegram, OpenClaw, and Diagnostics
+- A polished local control panel with tabs for Resolve, Telegram, OpenClaw, and Diagnostics
 - Media resolution APIs for browser and agent workflows
 - An optional Telegram polling bot when a bot token is configured
 - Download storage under `/data/downloads` by default

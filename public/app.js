@@ -22,6 +22,8 @@ const downloadAllButton = document.querySelector('#download-all-button');
 const submitButton = document.querySelector('#submit-button');
 
 const telegramRuntimePill = document.querySelector('#telegram-runtime-pill');
+const headerTelegramMode = document.querySelector('#header-telegram-mode');
+const headerTelegramAllowlist = document.querySelector('#header-telegram-allowlist');
 const telegramEnabled = document.querySelector('#telegram-enabled');
 const telegramBotToken = document.querySelector('#telegram-bot-token');
 const telegramClearToken = document.querySelector('#telegram-clear-token');
@@ -98,6 +100,14 @@ function setTelegramStatus(message, tone = '') {
 
 function setOpenClawStatus(message, tone = '') {
   setMessage(openclawStatus, message, tone);
+}
+
+function countConfiguredChatIds(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .length;
 }
 
 function clearChildren(node) {
@@ -504,6 +514,8 @@ function applyConfigToForm(config, telegram) {
   openclawMcpScriptPath.value = config.openclaw.mcpScriptPath || '';
 
   telegramRuntimePill.textContent = telegram.runtimeEnabled ? 'enabled' : 'disabled';
+  headerTelegramMode.textContent = telegram.deliveryMode || config.telegram.deliveryMode || 'document';
+  headerTelegramAllowlist.textContent = String(countConfiguredChatIds(config.telegram.allowedChatIds));
 }
 
 async function loadDiagnostics() {

@@ -230,7 +230,7 @@ src/mcp-server.js
 
 - 文件位置：`.github/workflows/docker-publish.yml`
 - `push` 到 `main` 时自动推送 `latest`
-- 推送形如 `v0.2.1` 的 tag 时自动推送对应版本标签
+- 推送形如 `v0.2.2` 的 tag 时自动推送对应版本标签
 - 同时构建 `linux/amd64` 和 `linux/arm64`
 
 在 GitHub 仓库里补两个 Actions secrets 即可启用：

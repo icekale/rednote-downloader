@@ -11,14 +11,29 @@
       <div class="topbar-inner">
         <div class="brand">
           <strong>RedNote Downloader</strong>
-          <span>小红书 / X 媒体抓取控制台</span>
         </div>
-        <div class="runtime-pills">
-          <span class="runtime-pill">
+        <div class="header-strip" aria-label="工作台概览">
+          <span class="header-chip">
+            <b>sources</b>
+            <em>2</em>
+          </span>
+          <span class="header-chip">
+            <b>pipelines</b>
+            <em>3</em>
+          </span>
+          <span class="header-chip">
+            <b>mode</b>
+            <em id="header-telegram-mode">document</em>
+          </span>
+          <span class="header-chip">
+            <b>chats</b>
+            <em id="header-telegram-allowlist">0</em>
+          </span>
+          <span class="header-chip">
             <b>service</b>
             <em>online</em>
           </span>
-          <span class="runtime-pill">
+          <span class="header-chip">
             <b>telegram</b>
             <em id="telegram-runtime-pill">checking</em>
           </span>
@@ -56,22 +71,26 @@
             </label>
 
             <section class="subcard action-card action-card-wide">
-              <div class="section-head compact">
+              <div class="section-head compact action-head">
                 <div>
                   <p class="section-kicker">Actions</p>
                   <h3>执行选项</h3>
                 </div>
-                <p class="section-note">公开帖子通常直接可下。只有碰到受限帖、解析失败或风控页时，再展开下面的 Cookie 选项。</p>
               </div>
 
-              <label class="checkbox-row checkbox-block">
-                <input id="server-download" name="serverDownload" type="checkbox">
-                <span>同时下载到服务端目录</span>
-              </label>
+              <div class="action-controls">
+                <div class="action-setting">
+                  <label class="checkbox-row checkbox-block">
+                    <input id="server-download" name="serverDownload" type="checkbox">
+                    <span>同时下载到服务端目录</span>
+                  </label>
+                  <p class="action-setting-note">公开帖子通常直接可下。只有碰到受限帖、解析失败或风控页时，再展开下面的 Cookie 选项。</p>
+                </div>
 
-              <div class="button-row">
-                <button id="submit-button" type="submit" class="button button-primary">解析并预览</button>
-                <button id="download-all-button" type="button" class="button" disabled>全部浏览器下载</button>
+                <div class="button-row action-buttons">
+                  <button id="submit-button" type="submit" class="button button-primary">解析并预览</button>
+                  <button id="download-all-button" type="button" class="button" disabled>全部浏览器下载</button>
+                </div>
               </div>
 
               <p id="status" class="status" aria-live="polite"></p>
@@ -145,8 +164,8 @@
           </div>
 
           <div class="stack">
-            <div class="section-grid">
-              <section class="subcard">
+            <div class="section-grid telegram-grid">
+              <section class="subcard form-panel telegram-panel">
                 <div class="section-head compact">
                   <div>
                     <p class="section-kicker">Runtime</p>
@@ -169,10 +188,10 @@
                   <span>保存时清空已保存 Token</span>
                 </label>
 
-                <p id="telegram-token-hint" class="status"></p>
+                <p id="telegram-token-hint" class="status telegram-status"></p>
               </section>
 
-              <section class="subcard">
+              <section class="subcard form-panel telegram-panel">
                 <div class="section-head compact">
                   <div>
                     <p class="section-kicker">Delivery</p>
@@ -193,12 +212,14 @@
                   <textarea id="telegram-allowed-chat-ids" rows="4" placeholder="多个 chat id 用逗号分隔"></textarea>
                 </label>
 
-                <div class="button-row">
-                  <button id="save-telegram-config-button" type="button" class="button button-primary">保存 Telegram 配置</button>
-                  <button id="refresh-runtime-button" type="button" class="button">刷新状态</button>
-                </div>
+                <div class="telegram-panel-footer">
+                  <div class="button-row telegram-actions">
+                    <button id="save-telegram-config-button" type="button" class="button button-primary">保存 Telegram 配置</button>
+                    <button id="refresh-runtime-button" type="button" class="button">刷新状态</button>
+                  </div>
 
-                <p id="telegram-config-status" class="status"></p>
+                  <p id="telegram-config-status" class="status telegram-status"></p>
+                </div>
               </section>
             </div>
             <p class="inline-tip">提示：`document` 更适合保留原始文件质量，`preview` 更适合直接在 Telegram 内预览。</p>
@@ -246,7 +267,7 @@
                   <input id="openclaw-mcp-script-path" type="text" placeholder="/Users/you/.../rednote/src/mcp-server.js">
                 </label>
 
-                <div class="button-row">
+                <div class="button-row openclaw-actions">
                   <button id="save-openclaw-config-button" type="button" class="button button-primary">保存 OpenClaw 配置</button>
                   <button id="refresh-openclaw-template-button" type="button" class="button">重新生成模板</button>
                 </div>
@@ -255,7 +276,7 @@
                 <p class="inline-tip">如果 rednote 跑在 Docker、OpenClaw 跑在宿主机，这里必须填宿主机真实路径，不能填容器内 `/app/...`。</p>
               </section>
 
-              <section class="subcard">
+              <section class="subcard templates-panel">
                 <div class="section-head compact">
                   <div>
                     <p class="section-kicker">Templates</p>
@@ -263,25 +284,31 @@
                   </div>
                 </div>
 
-                <label class="field">
-                  <span>mcporter 配置片段</span>
-                  <textarea id="mcporter-snippet" rows="8" readonly></textarea>
-                </label>
-                <div class="button-row compact">
-                  <button type="button" data-copy-target="mcporter-snippet" class="button">复制 mcporter 配置</button>
-                </div>
+                <div class="template-stack">
+                  <div class="template-item">
+                    <label class="field">
+                      <span>mcporter 配置片段</span>
+                      <textarea id="mcporter-snippet" rows="8" readonly></textarea>
+                    </label>
+                    <div class="button-row template-actions">
+                      <button type="button" data-copy-target="mcporter-snippet" class="button">复制 mcporter 配置</button>
+                    </div>
+                  </div>
 
-                <label class="field">
-                  <span>Agent 提示词</span>
-                  <textarea id="agent-prompt" rows="7" readonly></textarea>
-                </label>
-                <div class="button-row compact">
-                  <button type="button" data-copy-target="agent-prompt" class="button">复制 Agent 提示词</button>
-                </div>
+                  <div class="template-item">
+                    <label class="field">
+                      <span>Agent 提示词</span>
+                      <textarea id="agent-prompt" rows="7" readonly></textarea>
+                    </label>
+                    <div class="button-row template-actions">
+                      <button type="button" data-copy-target="agent-prompt" class="button">复制 Agent 提示词</button>
+                    </div>
+                  </div>
 
-                <div class="field">
-                  <span>服务端配置文件路径</span>
-                  <code id="config-path" class="code-block"></code>
+                  <div class="field">
+                    <span>服务端配置文件路径</span>
+                    <code id="config-path" class="code-block"></code>
+                  </div>
                 </div>
               </section>
             </div>
