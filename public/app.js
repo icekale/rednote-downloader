@@ -291,7 +291,7 @@ function renderMedia(items) {
       })
     );
 
-    card.append(topLine, mediaNode, actions);
+    card.append(topLine, actions, mediaNode);
     mediaGridEl.appendChild(card);
   });
 }
