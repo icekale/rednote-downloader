@@ -1,0 +1,356 @@
+import { setTimeout as delay } from 'node:timers/promises';
+import { extractFirstUrl, fetchMediaResponse, resolveNote, sanitizeFileName } from './xhs.js';
+
+const TELEGRAM_API_BASE = 'https://api.telegram.org';
+const POLL_TIMEOUT_SECONDS = 30;
+const MAX_CAPTION_LENGTH = 900;
+const TELEGRAM_MEDIA_GROUP_LIMIT = 10;
+
+export function parseAllowedChatIds(input) {
+  return new Set(
+    String(input || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+}
+
+function toTelegramApiUrl(token, method) {
+  return `${TELEGRAM_API_BASE}/bot${token}/${method}`;
+}
+
+function trimCaption(text) {
+  const source = String(text || '').trim();
+  if (source.length <= MAX_CAPTION_LENGTH) {
+    return source;
+  }
+
+  return `${source.slice(0, MAX_CAPTION_LENGTH - 1)}…`;
+}
+
+export function buildTelegramCaption(note) {
+  const lines = [
+    note?.title || 'Untitled RedNote Note',
+    note?.author?.nickname ? `作者: ${note.author.nickname}` : '',
+    note?.description || '',
+    note?.resolvedUrl || '',
+  ].filter(Boolean);
+
+  return trimCaption(lines.join('\n\n'));
+}
+
+export function inferTelegramFileName(item, note, index) {
+  if (item.fileName) {
+    return item.fileName;
+  }
+
+  const base = sanitizeFileName(note?.title || note?.noteId || 'rednote');
+  const url = item?.url || '';
+  const match = url.match(/\.([a-z0-9]{2,5})(?:$|[?#])/i);
+  const ext = match?.[1] || (item?.type === 'video' ? 'mp4' : 'jpg');
+
+  if (item?.type === 'video') {
+    return `${base}.${ext}`;
+  }
+
+  return `${base}_${String(index + 1).padStart(2, '0')}.${ext}`;
+}
+
+export function isTelegramChatAllowed(chatId, allowedChatIds) {
+  if (!allowedChatIds?.size) {
+    return true;
+  }
+
+  return allowedChatIds.has(String(chatId));
+}
+
+export function chunkTelegramMedia(items, chunkSize = TELEGRAM_MEDIA_GROUP_LIMIT) {
+  const chunks = [];
+
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+
+  return chunks;
+}
+
+export function getTelegramMediaGroupType(item, deliveryMode = 'document') {
+  if (deliveryMode === 'preview') {
+    return item?.type === 'video' ? 'video' : 'photo';
+  }
+
+  return 'document';
+}
+
+async function telegramRequest(token, method, payload, isMultipart = false) {
+  const response = await fetch(toTelegramApiUrl(token, method), {
+    method: 'POST',
+    body: isMultipart ? payload : JSON.stringify(payload),
+    headers: isMultipart ? undefined : { 'Content-Type': 'application/json' },
+  });
+
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    throw new Error(data?.description || `Telegram API error (${response.status})`);
+  }
+
+  return data.result;
+}
+
+async function sendText(token, chatId, text, replyToMessageId) {
+  return telegramRequest(token, 'sendMessage', {
+    chat_id: chatId,
+    text,
+    reply_to_message_id: replyToMessageId,
+    disable_web_page_preview: true,
+  });
+}
+
+async function sendChatAction(token, chatId, action) {
+  return telegramRequest(token, 'sendChatAction', {
+    chat_id: chatId,
+    action,
+  });
+}
+
+async function uploadMediaAsTelegramFile(token, method, fieldName, chatId, item, note, index, options = {}) {
+  const { response } = await fetchMediaResponse(item.url);
+  const contentType = response.headers.get('content-type') || (item.type === 'video' ? 'video/mp4' : 'image/jpeg');
+  const fileName = inferTelegramFileName(item, note, index);
+  const body = new FormData();
+
+  body.append('chat_id', String(chatId));
+  if (options.replyToMessageId) {
+    body.append('reply_to_message_id', String(options.replyToMessageId));
+  }
+  if (options.caption) {
+    body.append('caption', options.caption);
+  }
+
+  const fileBlob = new Blob([await response.arrayBuffer()], { type: contentType });
+  body.append(fieldName, fileBlob, fileName);
+
+  return telegramRequest(token, method, body, true);
+}
+
+async function uploadMediaGroup(token, chatId, note, items, startIndex, options = {}) {
+  const deliveryMode = options.deliveryMode || 'document';
+  const body = new FormData();
+  const mediaEntries = [];
+
+  body.append('chat_id', String(chatId));
+  if (options.replyToMessageId) {
+    body.append('reply_to_message_id', String(options.replyToMessageId));
+  }
+
+  for (const [offset, item] of items.entries()) {
+    const itemIndex = startIndex + offset;
+    const { response } = await fetchMediaResponse(item.url);
+    const contentType = response.headers.get('content-type') || (item.type === 'video' ? 'video/mp4' : 'image/jpeg');
+    const fieldName = `media_${itemIndex}`;
+    const fileName = inferTelegramFileName(item, note, itemIndex);
+    const fileBlob = new Blob([await response.arrayBuffer()], { type: contentType });
+
+    body.append(fieldName, fileBlob, fileName);
+
+    const mediaEntry = {
+      type: getTelegramMediaGroupType(item, deliveryMode),
+      media: `attach://${fieldName}`,
+    };
+
+    if (offset === 0 && options.caption) {
+      mediaEntry.caption = options.caption;
+    }
+
+    mediaEntries.push(mediaEntry);
+  }
+
+  body.append('media', JSON.stringify(mediaEntries));
+  return telegramRequest(token, 'sendMediaGroup', body, true);
+}
+
+async function sendResolvedMediaSequential(token, chatId, note, options = {}) {
+  const deliveryMode = options.deliveryMode || 'document';
+  const caption = buildTelegramCaption(note);
+
+  if (deliveryMode === 'preview') {
+    for (const [index, item] of note.media.entries()) {
+      const method = item.type === 'video' ? 'sendVideo' : 'sendPhoto';
+      const fieldName = item.type === 'video' ? 'video' : 'photo';
+      await uploadMediaAsTelegramFile(token, method, fieldName, chatId, item, note, index, {
+        replyToMessageId: options.replyToMessageId,
+        caption: index === 0 ? caption : undefined,
+      });
+    }
+    return;
+  }
+
+  for (const [index, item] of note.media.entries()) {
+    await uploadMediaAsTelegramFile(token, 'sendDocument', 'document', chatId, item, note, index, {
+      replyToMessageId: index === 0 ? options.replyToMessageId : undefined,
+      caption: index === 0 ? caption : undefined,
+    });
+  }
+}
+
+async function sendResolvedMedia(token, chatId, note, options = {}) {
+  const media = Array.isArray(note?.media) ? note.media : [];
+  const caption = buildTelegramCaption(note);
+
+  if (!media.length) {
+    await sendText(token, chatId, caption, options.replyToMessageId);
+    return;
+  }
+
+  if (media.length === 1) {
+    const [item] = media;
+    if ((options.deliveryMode || 'document') === 'preview') {
+      const method = item.type === 'video' ? 'sendVideo' : 'sendPhoto';
+      const fieldName = item.type === 'video' ? 'video' : 'photo';
+      await uploadMediaAsTelegramFile(token, method, fieldName, chatId, item, note, 0, {
+        replyToMessageId: options.replyToMessageId,
+        caption,
+      });
+      return;
+    }
+
+    await uploadMediaAsTelegramFile(token, 'sendDocument', 'document', chatId, item, note, 0, {
+      replyToMessageId: options.replyToMessageId,
+      caption,
+    });
+    return;
+  }
+
+  try {
+    const chunks = chunkTelegramMedia(media);
+
+    for (const [chunkIndex, chunk] of chunks.entries()) {
+      await uploadMediaGroup(token, chatId, note, chunk, chunkIndex * TELEGRAM_MEDIA_GROUP_LIMIT, {
+        deliveryMode: options.deliveryMode,
+        replyToMessageId: chunkIndex === 0 ? options.replyToMessageId : undefined,
+        caption: chunkIndex === 0 ? caption : undefined,
+      });
+    }
+  } catch (error) {
+    console.warn('[telegram] media group send failed, falling back to sequential uploads:', error instanceof Error ? error.message : error);
+    await sendResolvedMediaSequential(token, chatId, note, options);
+  }
+}
+
+function buildHelpText() {
+  return [
+    '把小红书链接、x.com/twitter.com 链接，或整段分享文案直接发给我。',
+    '我会解析帖子并把图片/视频直接回到 Telegram。',
+    '如果你想保留原始文件质量，保持默认 document 模式就可以。',
+  ].join('\n');
+}
+
+export class TelegramBotRunner {
+  constructor(options) {
+    this.token = options.token;
+    this.allowedChatIds = options.allowedChatIds;
+    this.deliveryMode = options.deliveryMode || 'document';
+    this.offset = 0;
+    this.running = false;
+  }
+
+  async fetchUpdates() {
+    const url = new URL(toTelegramApiUrl(this.token, 'getUpdates'));
+    url.searchParams.set('timeout', String(POLL_TIMEOUT_SECONDS));
+    url.searchParams.set('offset', String(this.offset));
+
+    const response = await fetch(url, { method: 'GET' });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data?.description || `Telegram polling failed (${response.status})`);
+    }
+
+    return data.result || [];
+  }
+
+  async handleMessage(message) {
+    const chatId = message?.chat?.id;
+    if (!chatId) {
+      return;
+    }
+
+    if (!isTelegramChatAllowed(chatId, this.allowedChatIds)) {
+      await sendText(this.token, chatId, 'This bot is not enabled for this Telegram chat.', message.message_id);
+      return;
+    }
+
+    const text = message?.text || message?.caption || '';
+    if (!text) {
+      return;
+    }
+
+    if (text === '/start' || text === '/help') {
+      await sendText(this.token, chatId, buildHelpText(), message.message_id);
+      return;
+    }
+
+    let input;
+    try {
+      input = extractFirstUrl(text);
+    } catch {
+      await sendText(this.token, chatId, '请直接发送小红书链接、x.com/twitter.com 链接，或者包含这些链接的整段分享文案。', message.message_id);
+      return;
+    }
+
+    try {
+      await sendChatAction(this.token, chatId, 'upload_document');
+      const note = await resolveNote(input);
+      await sendResolvedMedia(this.token, chatId, note, {
+        deliveryMode: this.deliveryMode,
+        replyToMessageId: message.message_id,
+      });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Unknown error';
+      await sendText(this.token, chatId, `解析失败：${messageText}`, message.message_id);
+    }
+  }
+
+  async pollOnce() {
+    const updates = await this.fetchUpdates();
+    for (const update of updates) {
+      this.offset = Math.max(this.offset, (update.update_id || 0) + 1);
+      if (update.message) {
+        await this.handleMessage(update.message);
+      }
+    }
+  }
+
+  async start() {
+    if (this.running) {
+      return;
+    }
+
+    this.running = true;
+
+    while (this.running) {
+      try {
+        await this.pollOnce();
+      } catch (error) {
+        console.error('[telegram] polling error:', error instanceof Error ? error.message : error);
+        await delay(3000);
+      }
+    }
+  }
+
+  stop() {
+    this.running = false;
+  }
+}
+
+export function getTelegramConfigFromEnv() {
+  const token = process.env.TELEGRAM_BOT_TOKEN || '';
+  if (!token) {
+    return null;
+  }
+
+  return {
+    token,
+    allowedChatIds: parseAllowedChatIds(process.env.TELEGRAM_ALLOWED_CHAT_IDS),
+    deliveryMode: process.env.TELEGRAM_DELIVERY_MODE === 'preview' ? 'preview' : 'document',
+  };
+}

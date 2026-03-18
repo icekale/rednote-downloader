@@ -1,0 +1,19 @@
+services:
+  rednote-downloader:
+    image: icekale/rednote-downloader:latest
+    container_name: rednote-downloader
+    ports:
+      - "3000:3000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      DOWNLOAD_DIR: /data/downloads
+      XHS_COOKIE: ${XHS_COOKIE:-}
+      XHS_USER_AGENT: ${XHS_USER_AGENT:-}
+      REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-15000}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
+      TELEGRAM_DELIVERY_MODE: ${TELEGRAM_DELIVERY_MODE:-document}
+    volumes:
+      - ./data:/data/downloads
+    restart: unless-stopped

@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RedNote Downloader</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <strong>RedNote Downloader</strong>
+          <span>小红书 / X 媒体抓取控制台</span>
+        </div>
+        <div class="runtime-pills">
+          <span class="runtime-pill">
+            <b>service</b>
+            <em>online</em>
+          </span>
+          <span class="runtime-pill">
+            <b>telegram</b>
+            <em id="telegram-runtime-pill">checking</em>
+          </span>
+        </div>
+      </div>
+    </header>
+
+    <main class="shell">
+      <nav class="tabs card" aria-label="主功能标签">
+        <button class="tab-button active" type="button" data-tab="resolve">解析下载</button>
+        <button class="tab-button" type="button" data-tab="telegram">Telegram</button>
+        <button class="tab-button" type="button" data-tab="openclaw">OpenClaw</button>
+        <button class="tab-button" type="button" data-tab="diagnostics">诊断</button>
+      </nav>
+
+      <section id="tab-resolve" class="tab-panel active">
+        <section class="card section-card">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">Resolve</p>
+              <h2>帖子解析与下载</h2>
+            </div>
+          </div>
+
+          <form id="resolve-form" class="stack">
+            <label class="field">
+              <span>分享链接或文案</span>
+              <textarea
+                id="input"
+                name="input"
+                rows="5"
+                placeholder="把小红书分享文案、x.com 链接，或 twitter.com 链接贴在这里"
+                required
+              ></textarea>
+            </label>
+
+            <section class="subcard action-card action-card-wide">
+              <div class="section-head compact">
+                <div>
+                  <p class="section-kicker">Actions</p>
+                  <h3>执行选项</h3>
+                </div>
+                <p class="section-note">公开帖子通常直接可下。只有碰到受限帖、解析失败或风控页时，再展开下面的 Cookie 选项。</p>
+              </div>
+
+              <label class="checkbox-row checkbox-block">
+                <input id="server-download" name="serverDownload" type="checkbox">
+                <span>同时下载到服务端目录</span>
+              </label>
+
+              <div class="button-row">
+                <button id="submit-button" type="submit" class="button button-primary">解析并预览</button>
+                <button id="download-all-button" type="button" class="button" disabled>全部浏览器下载</button>
+              </div>
+
+              <p id="status" class="status" aria-live="polite"></p>
+            </section>
+
+            <details class="subcard advanced-card">
+              <summary class="advanced-summary">
+                <span>可选 Cookie</span>
+                <em>仅在受限帖子时再填写</em>
+              </summary>
+
+              <div class="advanced-body">
+                <div class="section-head compact">
+                  <div>
+                    <p class="section-kicker">Cookie</p>
+                    <h3>解析鉴权</h3>
+                  </div>
+                  <p class="section-note">Cookie 只保存在当前浏览器。大多数公开帖子不用填，失败时再补就够了。</p>
+                </div>
+
+                <label class="field">
+                  <span>Cookie Header</span>
+                  <textarea
+                    id="cookie-input"
+                    name="cookie"
+                    rows="4"
+                    placeholder="可直接粘贴 Cookie header，也可以拖入 cookies.txt / JSON"
+                  ></textarea>
+                </label>
+
+                <div id="cookie-dropzone" class="dropzone" tabindex="0" role="button" aria-label="拖拽导入 Cookie 文件">
+                  <p>拖拽 `cookies.txt`、JSON，或纯文本 Cookie 到这里</p>
+                  <p class="dropzone-sub">也可以点击这里选择文件</p>
+                  <input id="cookie-file" type="file" accept=".txt,.json,text/plain,application/json" hidden>
+                </div>
+
+                <div class="button-row">
+                  <button id="save-cookie-button" type="button" class="button">保存到本地浏览器</button>
+                  <button id="clear-cookie-button" type="button" class="button">清空 Cookie</button>
+                </div>
+                <p id="cookie-status" class="status" aria-live="polite"></p>
+              </div>
+            </details>
+          </form>
+        </section>
+
+        <section id="result" class="card result hidden" aria-live="polite">
+          <div class="section-head compact">
+            <div>
+              <p id="note-meta" class="note-meta"></p>
+              <h2 id="note-title"></h2>
+            </div>
+            <a id="open-note-link" class="inline-link" target="_blank" rel="noreferrer">查看原帖</a>
+          </div>
+
+          <p id="note-desc" class="note-desc"></p>
+          <div id="warnings" class="notice hidden"></div>
+          <div id="download-summary" class="notice hidden"></div>
+          <div id="media-grid" class="media-grid"></div>
+        </section>
+      </section>
+
+      <section id="tab-telegram" class="tab-panel">
+        <section class="card section-card">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">Telegram</p>
+              <h2>图形化 Bot 配置</h2>
+            </div>
+            <p class="section-note">保存后立即热更新。适合本地自己调，不用再回容器里改环境变量。</p>
+          </div>
+
+          <div class="stack">
+            <div class="section-grid">
+              <section class="subcard">
+                <div class="section-head compact">
+                  <div>
+                    <p class="section-kicker">Runtime</p>
+                    <h3>基础设置</h3>
+                  </div>
+                </div>
+
+                <label class="checkbox-row checkbox-block">
+                  <input id="telegram-enabled" type="checkbox">
+                  <span>启用 Telegram Bot</span>
+                </label>
+
+                <label class="field">
+                  <span>Bot Token</span>
+                  <input id="telegram-bot-token" type="password" placeholder="留空表示保持当前已保存 Token">
+                </label>
+
+                <label class="checkbox-row checkbox-block">
+                  <input id="telegram-clear-token" type="checkbox">
+                  <span>保存时清空已保存 Token</span>
+                </label>
+
+                <p id="telegram-token-hint" class="status"></p>
+              </section>
+
+              <section class="subcard">
+                <div class="section-head compact">
+                  <div>
+                    <p class="section-kicker">Delivery</p>
+                    <h3>发送策略</h3>
+                  </div>
+                </div>
+
+                <label class="field">
+                  <span>Delivery Mode</span>
+                  <select id="telegram-delivery-mode">
+                    <option value="document">document</option>
+                    <option value="preview">preview</option>
+                  </select>
+                </label>
+
+                <label class="field">
+                  <span>Allowed Chat IDs</span>
+                  <textarea id="telegram-allowed-chat-ids" rows="4" placeholder="多个 chat id 用逗号分隔"></textarea>
+                </label>
+
+                <div class="button-row">
+                  <button id="save-telegram-config-button" type="button" class="button button-primary">保存 Telegram 配置</button>
+                  <button id="refresh-runtime-button" type="button" class="button">刷新状态</button>
+                </div>
+
+                <p id="telegram-config-status" class="status"></p>
+              </section>
+            </div>
+            <p class="inline-tip">提示：`document` 更适合保留原始文件质量，`preview` 更适合直接在 Telegram 内预览。</p>
+          </div>
+        </section>
+      </section>
+
+      <section id="tab-openclaw" class="tab-panel">
+        <section class="card section-card">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">OpenClaw</p>
+              <h2>Agent 接入</h2>
+            </div>
+            <p class="section-note">生成可直接复制的 `mcporter` 片段和 agent 提示词，用来把小红书或 X 的媒体直接回到 Telegram。</p>
+          </div>
+
+          <div class="stack">
+            <div class="section-grid">
+              <section class="subcard">
+                <div class="section-head compact">
+                  <div>
+                    <p class="section-kicker">Config</p>
+                    <h3>连接参数</h3>
+                  </div>
+                </div>
+
+                <label class="field">
+                  <span>Service Base URL</span>
+                  <input id="openclaw-service-base-url" type="text" placeholder="http://127.0.0.1:3000">
+                </label>
+
+                <label class="field">
+                  <span>MCP Server Name</span>
+                  <input id="openclaw-server-name" type="text" placeholder="rednote">
+                </label>
+
+                <label class="field">
+                  <span>Preferred Agent ID</span>
+                  <input id="openclaw-agent-id" type="text" placeholder="bfxia">
+                </label>
+
+                <label class="field">
+                  <span>宿主机 MCP 脚本路径</span>
+                  <input id="openclaw-mcp-script-path" type="text" placeholder="/Users/you/.../rednote/src/mcp-server.js">
+                </label>
+
+                <div class="button-row">
+                  <button id="save-openclaw-config-button" type="button" class="button button-primary">保存 OpenClaw 配置</button>
+                  <button id="refresh-openclaw-template-button" type="button" class="button">重新生成模板</button>
+                </div>
+
+                <p id="openclaw-status" class="status"></p>
+                <p class="inline-tip">如果 rednote 跑在 Docker、OpenClaw 跑在宿主机，这里必须填宿主机真实路径，不能填容器内 `/app/...`。</p>
+              </section>
+
+              <section class="subcard">
+                <div class="section-head compact">
+                  <div>
+                    <p class="section-kicker">Templates</p>
+                    <h3>复制片段</h3>
+                  </div>
+                </div>
+
+                <label class="field">
+                  <span>mcporter 配置片段</span>
+                  <textarea id="mcporter-snippet" rows="8" readonly></textarea>
+                </label>
+                <div class="button-row compact">
+                  <button type="button" data-copy-target="mcporter-snippet" class="button">复制 mcporter 配置</button>
+                </div>
+
+                <label class="field">
+                  <span>Agent 提示词</span>
+                  <textarea id="agent-prompt" rows="7" readonly></textarea>
+                </label>
+                <div class="button-row compact">
+                  <button type="button" data-copy-target="agent-prompt" class="button">复制 Agent 提示词</button>
+                </div>
+
+                <div class="field">
+                  <span>服务端配置文件路径</span>
+                  <code id="config-path" class="code-block"></code>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="tab-diagnostics" class="tab-panel">
+        <section class="card section-card">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">Diagnostics</p>
+              <h2>联调状态面板</h2>
+            </div>
+            <p class="section-note">把 rednote 服务、Telegram 运行态和 OpenClaw 接线情况放到一页里，排障时不用来回翻。</p>
+          </div>
+
+          <div class="button-row">
+            <button id="refresh-diagnostics-button" type="button" class="button button-primary">刷新诊断</button>
+          </div>
+
+          <div id="diagnostics-cards" class="diagnostics-grid"></div>
+
+          <section class="subcard">
+            <div class="section-head compact">
+              <div>
+                <p class="section-kicker">Checks</p>
+                <h3>健康检查</h3>
+              </div>
+              <p class="section-note">快速确认服务 base URL 和本地运行态是不是都通的。</p>
+            </div>
+            <div id="diagnostics-checks" class="check-list"></div>
+          </section>
+
+          <section class="subcard">
+            <div class="section-head compact">
+              <div>
+                <p class="section-kicker">Hints</p>
+                <h3>建议动作</h3>
+              </div>
+              <p class="section-note">根据当前配置自动给出下一步检查建议。</p>
+            </div>
+            <div id="diagnostics-hints" class="hint-list"></div>
+          </section>
+
+          <label class="field">
+            <span>Raw Diagnostics JSON</span>
+            <textarea id="diagnostics-json" rows="14" readonly></textarea>
+          </label>
+          <div class="button-row compact">
+            <button type="button" data-copy-target="diagnostics-json" class="button">复制诊断 JSON</button>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
