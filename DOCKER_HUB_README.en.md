@@ -34,10 +34,10 @@ docker run -d \
   --user "$(id -u):$(id -g)" \
   -p 3000:3000 \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.8
+  icekale/rednote-downloader:v0.2.9
 ```
 
-If you prefer a floating tag, replace `v0.2.8` with `latest`.
+If you prefer a floating tag, replace `v0.2.9` with `latest`.
 
 Then open:
 
@@ -50,7 +50,7 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.8
+    image: icekale/rednote-downloader:v0.2.9
     container_name: rednote-downloader
     ports:
       - "3000:3000"
@@ -105,6 +105,7 @@ services:
 - The OpenClaw tool output includes Telegram-ready text plus direct media URLs
 - A Telegram bot token can only be long-polled by one running instance at a time; use `TELEGRAM_ENABLED=false` for temporary sidecar checks
 - Legacy config files stored directly under `/data` are copied into `/data/config` on first boot after upgrade
+- Legacy download folders stored directly under `/data` are moved into `/data/downloads` on first boot when they match the old naming pattern
 
 ## Best Fit
 

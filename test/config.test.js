@@ -7,8 +7,10 @@ import {
   getAppConfigPath,
   getAppStatePath,
   getPublicConfig,
+  looksLikeLegacyDownloadEntry,
   mergeAppConfig,
   migrateLegacyAppFiles,
+  migrateLegacyDownloadEntries,
   normalizeEnvBoolean,
   sanitizeAppConfig,
   sanitizeAppState,
@@ -159,6 +161,36 @@ test('migrateLegacyAppFiles also picks files from the parent of downloadDir for 
   });
   assert.equal(await readFile(nextConfigPath, 'utf8'), '{"telegram":{"enabled":false}}\n');
   assert.equal(await readFile(nextStatePath, 'utf8'), '{"telegram":{"updateOffset":34}}\n');
+});
+
+test('looksLikeLegacyDownloadEntry only matches old top-level download names', () => {
+  assert.equal(looksLikeLegacyDownloadEntry('X @imanstore_9_2031161811874324962'), true);
+  assert.equal(looksLikeLegacyDownloadEntry('示例标题_abcd1234'), true);
+  assert.equal(looksLikeLegacyDownloadEntry('.rednote-config.json'), false);
+  assert.equal(looksLikeLegacyDownloadEntry('config'), false);
+  assert.equal(looksLikeLegacyDownloadEntry('downloads'), false);
+});
+
+test('migrateLegacyDownloadEntries moves legacy download folders into downloads dir', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'rednote-download-layout-'));
+  const dataDir = path.join(tempRoot, 'data');
+  const downloadDir = path.join(dataDir, 'downloads');
+  const legacyEntry = path.join(dataDir, 'X @imanstore_9_2031161811874324962');
+  const configDir = path.join(dataDir, 'config');
+
+  await mkdir(path.join(legacyEntry), { recursive: true });
+  await mkdir(configDir, { recursive: true });
+  await writeFile(path.join(legacyEntry, 'media.mp4'), 'demo', 'utf8');
+  await writeFile(path.join(dataDir, '.rednote-config.json'), '{}\n', 'utf8');
+
+  const moved = await migrateLegacyDownloadEntries(downloadDir);
+
+  assert.deepEqual(moved, ['X @imanstore_9_2031161811874324962']);
+  assert.equal(
+    await readFile(path.join(downloadDir, 'X @imanstore_9_2031161811874324962', 'media.mp4'), 'utf8'),
+    'demo',
+  );
+  assert.equal(await readFile(path.join(dataDir, '.rednote-config.json'), 'utf8'), '{}\n');
 });
 
 test('normalizeEnvBoolean understands common truthy and falsy strings', () => {

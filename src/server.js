@@ -13,6 +13,7 @@ import {
   loadAppConfig,
   mergeAppConfig,
   migrateLegacyAppFiles,
+  migrateLegacyDownloadEntries,
   normalizeDeliveryMode,
   normalizeEnvBoolean,
   normalizeServiceBaseUrl,
@@ -231,6 +232,7 @@ const legacyMigration = await migrateLegacyAppFiles({
   configPath: APP_CONFIG_PATH,
   statePath: APP_STATE_PATH,
 });
+const migratedLegacyDownloads = await migrateLegacyDownloadEntries(DOWNLOAD_DIR);
 
 let appConfig = await loadAppConfig(APP_CONFIG_PATH);
 let appState = await loadAppState(APP_STATE_PATH);
@@ -692,6 +694,9 @@ server.listen(PORT, HOST, () => {
   console.log(`state file: ${APP_STATE_PATH}`);
   if (legacyMigration.config || legacyMigration.state) {
     console.log('[config] migrated legacy app files into the dedicated config directory');
+  }
+  if (migratedLegacyDownloads.length) {
+    console.log(`[downloads] moved ${migratedLegacyDownloads.length} legacy entries into ${DOWNLOAD_DIR}`);
   }
 
   if (ADMIN_TOKEN) {

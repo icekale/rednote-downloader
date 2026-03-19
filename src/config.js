@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { access, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 
 const DEFAULT_OPENCLAW_SERVICE_BASE_URL = 'http://127.0.0.1:3000';
 const DEFAULT_MCP_SERVER_NAME = 'rednote';
@@ -219,6 +219,49 @@ export async function migrateLegacyAppFiles({ downloadDir, configPath, statePath
       statePath,
     ),
   };
+}
+
+export function looksLikeLegacyDownloadEntry(name) {
+  if (typeof name !== 'string' || !name || name.startsWith('.')) {
+    return false;
+  }
+
+  const stem = name.replace(/\.[^.]+$/, '');
+  return /_[A-Za-z0-9]{6,}$/.test(stem);
+}
+
+export async function migrateLegacyDownloadEntries(downloadDir) {
+  const targetDir = path.resolve(downloadDir);
+  const legacyRootDir = path.resolve(path.dirname(targetDir));
+  const reservedNames = new Set([
+    path.basename(targetDir),
+    'config',
+  ]);
+  const moved = [];
+
+  await mkdir(targetDir, { recursive: true });
+
+  if (legacyRootDir === targetDir) {
+    return moved;
+  }
+
+  const entries = await readdir(legacyRootDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (reservedNames.has(entry.name) || !looksLikeLegacyDownloadEntry(entry.name)) {
+      continue;
+    }
+
+    const sourcePath = path.join(legacyRootDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+    if (await fileExists(targetPath)) {
+      continue;
+    }
+
+    await rename(sourcePath, targetPath);
+    moved.push(entry.name);
+  }
+
+  return moved;
 }
 
 export async function loadAppConfig(configPath) {

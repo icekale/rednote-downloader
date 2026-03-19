@@ -163,7 +163,7 @@ docker compose up --build
 docker compose -f compose.hub.yaml up -d
 ```
 
-`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.8`。
+`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.9`。
 
 Docker 默认会把容器内目录拆成：
 
@@ -240,6 +240,12 @@ Telegram 轮询状态默认会单独保存在：
 
 复制到新的 `/data/config/` 目录里。
 
+如果旧版本的下载目录直接堆在 `/data` 根目录，服务启动时也会把符合旧命名规则的历史下载目录自动移动到：
+
+```text
+/data/downloads/
+```
+
 如果你计划把管理页暴露到非本机环境，建议同时配置：
 
 - `REDNOTE_ADMIN_TOKEN`: 保护 `/api/config`、`/api/diagnostics`、`/api/openclaw/template`、`/api/telegram/status`
@@ -277,7 +283,7 @@ src/mcp-server.js
 
 - 文件位置：`.github/workflows/docker-publish.yml`
 - `push` 到 `main` 时自动推送 `latest`
-- 推送形如 `v0.2.8` 的 tag 时自动推送对应版本标签
+- 推送形如 `v0.2.9` 的 tag 时自动推送对应版本标签
 - 同时构建 `linux/amd64` 和 `linux/arm64`
 
 在 GitHub 仓库里补两个 Actions secrets 即可启用：

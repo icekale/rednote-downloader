@@ -34,7 +34,7 @@ docker run -d \
   --user "$(id -u):$(id -g)" \
   -p 3000:3000 \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.8
+  icekale/rednote-downloader:v0.2.9
 ```
 
 如果你希望始终跟随最新镜像，也可以把 tag 换成 `latest`。
@@ -50,7 +50,7 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.8
+    image: icekale/rednote-downloader:v0.2.9
     container_name: rednote-downloader
     ports:
       - "3000:3000"
@@ -105,6 +105,7 @@ services:
 - OpenClaw 工具返回的是适合 Telegram 使用的说明文本和直链媒体地址
 - 同一个 Telegram bot token 同时只能有一个长轮询实例；如果只是临时起副本做检查，建议设置 `TELEGRAM_ENABLED=false`
 - 如果旧版本把配置直接保存在 `/data` 根目录，升级后首次启动会自动复制到 `/data/config`
+- 如果旧版本把历史下载目录直接放在 `/data` 根目录，升级后首次启动会把符合旧命名规则的目录自动移动到 `/data/downloads`
 
 ## 适合谁
 
