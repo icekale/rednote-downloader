@@ -54,6 +54,20 @@ const copyButtons = Array.from(document.querySelectorAll('[data-copy-target]'));
 let latestMedia = [];
 let latestTitle = 'rednote-media';
 
+function normalizeNoteText(input) {
+  return String(input || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 48);
+}
+
+function deriveNoteFileStem(note) {
+  const title = normalizeNoteText(note?.title);
+  const description = normalizeNoteText(note?.description);
+  const genericTitle = /^X\s*@/i.test(title) || /^X\s+Post$/i.test(title);
+  return description || (!genericTitle ? title : '') || note?.noteId || 'rednote-media';
+}
+
 function setMessage(element, message, tone = '') {
   element.textContent = message;
   element.classList.remove('error', 'success');
@@ -353,12 +367,17 @@ function renderWarnings(warnings) {
 function renderDownloadSummary(download) {
   if (!download?.outputDir) {
     downloadSummaryEl.classList.add('hidden');
+    downloadSummaryEl.classList.remove('success');
     downloadSummaryEl.innerHTML = '';
     return;
   }
 
   downloadSummaryEl.classList.remove('hidden');
-  downloadSummaryEl.innerHTML = `<p>文件已经下载到服务端目录：<strong>${download.outputDir}</strong></p>`;
+  downloadSummaryEl.classList.add('success');
+  downloadSummaryEl.innerHTML = `
+    <p><strong>服务端下载完成</strong></p>
+    <p>保存路径：<code>${escapeHtml(download.outputDir)}</code></p>
+  `;
 }
 
 function renderMedia(items) {
@@ -510,7 +529,7 @@ function renderDiagnosticsHints(hints) {
 }
 
 function updateHeader(note) {
-  latestTitle = (note.title || 'rednote-media')
+  latestTitle = deriveNoteFileStem(note)
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -547,7 +566,11 @@ async function onSubmit(event) {
     renderWarnings(data.note.warnings);
     renderDownloadSummary(data.download);
     renderMedia(data.note.media || []);
-    setStatus(`解析完成，共找到 ${data.note.media?.length || 0} 个媒体文件。`);
+    if (data.download?.outputDir) {
+      setStatus(`服务端下载完成，已保存到 ${data.download.outputDir}`);
+    } else {
+      setStatus(`解析完成，共找到 ${data.note.media?.length || 0} 个媒体文件。`);
+    }
     switchTab('resolve');
   } catch (error) {
     resultEl.classList.add('hidden');

@@ -32,7 +32,7 @@ docker run -d \
   --restart unless-stopped \
   -p 3000:3000 \
   -v "$(pwd)/data:/data/downloads" \
-  icekale/rednote-downloader:v0.2.6
+  icekale/rednote-downloader:v0.2.7
 ```
 
 如果你希望始终跟随最新镜像，也可以把 tag 换成 `latest`。
@@ -48,7 +48,7 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.6
+    image: icekale/rednote-downloader:v0.2.7
     container_name: rednote-downloader
     ports:
       - "3000:3000"

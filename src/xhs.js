@@ -61,6 +61,21 @@ export function sanitizeFileName(input, fallback = 'note') {
   return safe || fallback;
 }
 
+function normalizeNoteText(input) {
+  return String(input || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 48);
+}
+
+export function deriveNoteFileStem(title, description, fallback = 'note') {
+  const normalizedTitle = normalizeNoteText(title);
+  const normalizedDescription = normalizeNoteText(description);
+  const genericTitle = /^X\s*@/i.test(normalizedTitle) || /^X\s+Post$/i.test(normalizedTitle);
+  const candidate = normalizedDescription || (!genericTitle ? normalizedTitle : '') || fallback;
+  return sanitizeFileName(candidate, fallback);
+}
+
 function isAllowedShareHost(hostname) {
   return XHS_SHARE_HOSTS.has(hostname) || TWITTER_SHARE_HOSTS.has(hostname);
 }
@@ -603,10 +618,31 @@ function inferExtension(url, contentType, fallback) {
 }
 
 async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs) {
-  const { url, response } = await fetchMediaResponse(item.url, {
-    cookie,
-    timeoutMs,
-  });
+  const candidates = [
+    item.url,
+    ...(Array.isArray(item.fallbackUrls) ? item.fallbackUrls : []),
+  ].filter(Boolean);
+  const uniqueCandidates = [...new Set(candidates)];
+  const errors = [];
+  let resolved = null;
+
+  for (const candidate of uniqueCandidates) {
+    try {
+      resolved = await fetchMediaResponse(candidate, {
+        cookie,
+        timeoutMs,
+      });
+      break;
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (!resolved) {
+    throw new Error(errors[0] || 'Failed to download media');
+  }
+
+  const { url, response } = resolved;
 
   const extension = inferExtension(url.toString(), response.headers.get('content-type'), item.type === 'video' ? 'mp4' : 'jpg');
   const fileName = item.type === 'video'
@@ -618,6 +654,7 @@ async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs) {
 
   return {
     ...item,
+    url: url.toString(),
     fileName,
     absolutePath,
   };
@@ -660,12 +697,13 @@ export async function fetchMediaResponse(input, options = {}) {
 export async function downloadMedia(media, noteTitle, noteId, downloadDir, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
   const cookie = options.cookie || process.env.XHS_COOKIE;
-  const safeDirName = sanitizeFileName(`${noteTitle || 'note'}_${noteId || 'unknown'}`);
+  const fileStem = deriveNoteFileStem(noteTitle, options.noteDescription, noteId || 'note');
+  const safeDirName = sanitizeFileName(`${fileStem}_${noteId || 'unknown'}`);
   const outputDir = path.join(downloadDir, safeDirName);
 
   await mkdir(outputDir, { recursive: true });
 
-  const baseName = sanitizeFileName(noteTitle || noteId || 'note', noteId || 'note');
+  const baseName = fileStem;
   const results = [];
 
   for (const item of media) {

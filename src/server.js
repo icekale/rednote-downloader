@@ -296,7 +296,10 @@ async function handleResolve(request, response, url) {
     note.title,
     note.noteId,
     DOWNLOAD_DIR,
-    { cookie: body.cookie },
+    {
+      cookie: body.cookie,
+      noteDescription: note.description,
+    },
   );
 
   sendJson(request, response, 200, {

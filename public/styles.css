@@ -703,6 +703,17 @@ select:focus {
   margin: 0;
 }
 
+.notice.success {
+  border-color: rgba(12, 139, 93, 0.2);
+  background: rgba(12, 139, 93, 0.08);
+  color: var(--success);
+}
+
+.notice.success code {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .media-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));

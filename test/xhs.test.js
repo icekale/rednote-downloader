@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
+import { mkdtemp } from 'node:fs/promises';
 import {
   buildFixTwitterApiUrl,
+  deriveNoteFileStem,
+  downloadMedia,
   deriveOriginalImageUrl,
   ensureAllowedMediaUrl,
   extractFirstUrl,
@@ -140,6 +145,13 @@ test('normalizeTwitterPhotoUrl prefers original-size image urls', () => {
   );
 });
 
+test('deriveNoteFileStem prefers description over generic X title', () => {
+  assert.equal(
+    deriveNoteFileStem('X @imanstore_9', '皮肤很白的鲜肉弟弟，说这是吃过最大的，非常享受我的内射奖励', 'fallback'),
+    '皮肤很白的鲜肉弟弟，说这是吃过最大的，非常享受我的内射奖励',
+  );
+});
+
 test('extractTwitterMedia keeps image order and picks best video variant', () => {
   const media = extractTwitterMedia({
     media: {
@@ -237,6 +249,59 @@ test('fetchMediaResponse only applies timeout until headers arrive', async () =>
 
     assert.equal(capturedSignal.aborted, false);
     assert.equal((await result.response.arrayBuffer()).byteLength, 3);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('downloadMedia falls back to alternate media urls when the primary url fails', async () => {
+  const originalFetch = global.fetch;
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-download-'));
+
+  global.fetch = async (url) => {
+    const value = String(url);
+
+    if (value.includes('/primary.mp4')) {
+      return new Response('missing', { status: 404 });
+    }
+
+    if (value.includes('/fallback.mp4')) {
+      return new Response(
+        new Uint8Array([1, 2, 3, 4]),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4',
+          },
+        },
+      );
+    }
+
+    throw new Error(`Unexpected url ${value}`);
+  };
+
+  try {
+    const result = await downloadMedia(
+      [
+        {
+          index: 1,
+          type: 'video',
+          url: 'https://video.twimg.com/demo/primary.mp4',
+          fallbackUrls: ['https://video.twimg.com/demo/fallback.mp4'],
+        },
+      ],
+      'X @demo_user',
+      'note123',
+      tempDir,
+      {
+        noteDescription: '这是一个用于测试服务端下载命名的帖子文案',
+      },
+    );
+
+    assert.equal(result.files.length, 1);
+    assert.equal(result.files[0].url, 'https://video.twimg.com/demo/fallback.mp4');
+    assert.match(result.files[0].absolutePath, /这是一个用于测试服务端下载命名的帖子文案_note123/);
+    assert.match(result.files[0].fileName, /^这是一个用于测试服务端下载命名的帖子文案\.mp4$/);
   } finally {
     global.fetch = originalFetch;
   }
