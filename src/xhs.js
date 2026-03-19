@@ -26,6 +26,7 @@ const MEDIA_HOST_SUFFIXES = [
 ];
 
 const DEFAULT_TIMEOUT_MS = Number.parseInt(process.env.REQUEST_TIMEOUT_MS || '15000', 10);
+const DEFAULT_MEDIA_TIMEOUT_MS = Number.parseInt(process.env.MEDIA_REQUEST_TIMEOUT_MS || '30000', 10);
 const DEFAULT_TWITTER_TIMEOUT_MS = Number.parseInt(process.env.TWITTER_REQUEST_TIMEOUT_MS || '30000', 10);
 const FIXTWITTER_API_BASE = process.env.FXTWITTER_API_BASE || 'https://api.fxtwitter.com';
 const TWITTER_API_BASES = [
@@ -623,18 +624,28 @@ async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs) {
 }
 
 export async function fetchMediaResponse(input, options = {}) {
-  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_MEDIA_TIMEOUT_MS;
   const cookie = options.cookie || process.env.XHS_COOKIE;
   const extraHeaders = options.headers && typeof options.headers === 'object' ? options.headers : {};
   const url = ensureAllowedMediaUrl(input);
-  const response = await fetch(url, {
-    headers: {
-      ...buildHeaders(url, cookie),
-      ...extraHeaders,
-    },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(timeoutMs),
-  });
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => {
+    controller.abort(new Error(`Media request timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        ...buildHeaders(url, cookie),
+        ...extraHeaders,
+      },
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 
   if (!response.ok || !response.body) {
     throw new Error(`Failed to download media: ${response.status} ${url}`);

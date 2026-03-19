@@ -167,6 +167,7 @@ docker compose -f compose.hub.yaml up -d
 设置下面的环境变量后，服务启动时会同时拉起一个 Telegram bot 轮询器：
 
 - `TELEGRAM_BOT_TOKEN`: 你的 Telegram bot token
+- `TELEGRAM_ENABLED`: 可选。设为 `false` / `0` 时，即使环境里或已保存配置里有 token 也不启动轮询器
 - `TELEGRAM_ALLOWED_CHAT_IDS`: 可选，允许使用 bot 的 chat id 列表，逗号分隔
 - `TELEGRAM_DELIVERY_MODE`: `document` 或 `preview`
 
@@ -179,12 +180,18 @@ docker compose -f compose.hub.yaml up -d
 
 ```bash
 TELEGRAM_BOT_TOKEN=123456:telegram-token \
+TELEGRAM_ENABLED=true \
 TELEGRAM_ALLOWED_CHAT_IDS=464100862 \
 TELEGRAM_DELIVERY_MODE=document \
 npm start
 ```
 
 或者在 `compose.hub.yaml` / `compose.yaml` 对应环境变量里填写。
+
+注意：
+
+- 同一个 Telegram bot token 同时只能有一个长轮询实例；第二个实例会收到 `Conflict: terminated by other getUpdates request`
+- 如果你只是想临时起一个副本做 UI / 鉴权 / API 检查，可以把 `TELEGRAM_ENABLED=false`，避免去抢主实例的轮询
 
 如果你更喜欢在网页里配置 Telegram，可以直接把 Token / chat id 保存到控制台页面。配置文件默认保存在：
 
@@ -197,6 +204,17 @@ npm start
 ```text
 /data/downloads/.rednote-config.json
 ```
+
+Telegram 轮询状态默认会单独保存在同目录的：
+
+```text
+<DOWNLOAD_DIR>/.rednote-state.json
+```
+
+如果你计划把管理页暴露到非本机环境，建议同时配置：
+
+- `REDNOTE_ADMIN_TOKEN`: 保护 `/api/config`、`/api/diagnostics`、`/api/openclaw/template`、`/api/telegram/status`
+- `CORS_ALLOWED_ORIGINS`: 需要跨域访问控制台时，显式允许的 Origin 列表，逗号分隔
 
 ## OpenClaw Integration
 
@@ -248,10 +266,15 @@ src/mcp-server.js
 - `XHS_COOKIE`: 可选。公开页面被风控时可以尝试带上浏览器 Cookie
 - `XHS_USER_AGENT`: 可选。覆盖默认浏览器 UA
 - `REQUEST_TIMEOUT_MS`: 可选。请求超时，默认 `15000`
+- `MEDIA_REQUEST_TIMEOUT_MS`: 可选。媒体请求的首包超时，默认 `30000`
+- `TELEGRAM_ENABLED`: 可选。设为 `false` / `0` 时禁用 Telegram 轮询器；默认只要环境或已保存配置里有 token 就启用
 - `TELEGRAM_BOT_TOKEN`: 可选。启用 Telegram bot 模式
 - `TELEGRAM_ALLOWED_CHAT_IDS`: 可选。允许的 Telegram chat id，逗号分隔
 - `TELEGRAM_DELIVERY_MODE`: 可选。`document` 或 `preview`，默认 `document`
 - `APP_CONFIG_PATH`: 可选。图形化配置保存路径，默认 `<DOWNLOAD_DIR>/.rednote-config.json`
+- `APP_STATE_PATH`: 可选。Telegram 轮询状态保存路径，默认与配置文件同目录的 `.rednote-state.json`
+- `REDNOTE_ADMIN_TOKEN`: 可选。设置后，管理接口需要携带 `X-Admin-Token`
+- `CORS_ALLOWED_ORIGINS`: 可选。额外允许跨域调用的 Origin，逗号分隔；默认只允许同源页面
 
 ## 目录结构
 

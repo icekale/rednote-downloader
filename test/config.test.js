@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  getAppStatePath,
   getPublicConfig,
   mergeAppConfig,
+  normalizeEnvBoolean,
   sanitizeAppConfig,
+  sanitizeAppState,
 } from '../src/config.js';
 
 test('sanitizeAppConfig applies defaults and trims fields', () => {
@@ -73,4 +76,26 @@ test('getPublicConfig masks stored telegram token', () => {
 
   assert.equal(result.telegram.botTokenSet, true);
   assert.match(result.telegram.botTokenMasked, /^1234\*\*\*cdef$/);
+});
+
+test('sanitizeAppState keeps a non-negative telegram offset', () => {
+  const result = sanitizeAppState({
+    telegram: {
+      updateOffset: ' 42 ',
+    },
+  });
+
+  assert.equal(result.telegram.updateOffset, 42);
+});
+
+test('getAppStatePath defaults next to the config file', () => {
+  const result = getAppStatePath({}, '/tmp/rednote-data', '/tmp/rednote-data/.rednote-config.json');
+  assert.equal(result, '/tmp/rednote-data/.rednote-state.json');
+});
+
+test('normalizeEnvBoolean understands common truthy and falsy strings', () => {
+  assert.equal(normalizeEnvBoolean('true', false), true);
+  assert.equal(normalizeEnvBoolean('OFF', true), false);
+  assert.equal(normalizeEnvBoolean('', true), true);
+  assert.equal(normalizeEnvBoolean('unexpected', false), false);
 });

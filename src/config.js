@@ -21,6 +21,12 @@ export const DEFAULT_APP_CONFIG = {
   },
 };
 
+export const DEFAULT_APP_STATE = {
+  telegram: {
+    updateOffset: 0,
+  },
+};
+
 function normalizeString(value, fallback = '') {
   if (typeof value !== 'string') {
     return fallback;
@@ -32,6 +38,43 @@ function normalizeString(value, fallback = '') {
 function normalizeBoolean(value, fallback = false) {
   if (typeof value === 'boolean') {
     return value;
+  }
+
+  return fallback;
+}
+
+export function normalizeEnvBoolean(value, fallback) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+}
+
+function normalizeNonNegativeInteger(value, fallback = 0) {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    return Number.parseInt(value.trim(), 10);
   }
 
   return fallback;
@@ -103,6 +146,18 @@ export function getAppConfigPath(env = process.env, downloadDir) {
   return path.resolve(path.join(downloadDir, '.rednote-config.json'));
 }
 
+export function getAppStatePath(env = process.env, downloadDir, configPath = '') {
+  if (env.APP_STATE_PATH) {
+    return path.resolve(env.APP_STATE_PATH);
+  }
+
+  if (configPath) {
+    return path.resolve(path.join(path.dirname(configPath), '.rednote-state.json'));
+  }
+
+  return path.resolve(path.join(downloadDir, '.rednote-state.json'));
+}
+
 export async function loadAppConfig(configPath) {
   try {
     const content = await readFile(configPath, 'utf8');
@@ -120,6 +175,39 @@ export async function saveAppConfig(configPath, config) {
   const normalized = sanitizeAppConfig(config);
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+  return normalized;
+}
+
+export function sanitizeAppState(input = {}) {
+  const telegram = input?.telegram || {};
+
+  return {
+    telegram: {
+      updateOffset: normalizeNonNegativeInteger(
+        telegram.updateOffset,
+        DEFAULT_APP_STATE.telegram.updateOffset,
+      ),
+    },
+  };
+}
+
+export async function loadAppState(statePath) {
+  try {
+    const content = await readFile(statePath, 'utf8');
+    return sanitizeAppState(JSON.parse(content));
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      return sanitizeAppState(DEFAULT_APP_STATE);
+    }
+
+    throw error;
+  }
+}
+
+export async function saveAppState(statePath, state) {
+  const normalized = sanitizeAppState(state);
+  await mkdir(path.dirname(statePath), { recursive: true });
+  await writeFile(statePath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
   return normalized;
 }
 

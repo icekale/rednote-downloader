@@ -1,5 +1,12 @@
 import { COOKIE_STORAGE_KEY, parseCookieText } from './cookie-utils.js';
 
+const ADMIN_TOKEN_STORAGE_KEY = 'rednote-downloader.adminToken';
+
+const adminTokenInput = document.querySelector('#admin-token');
+const adminTokenStatus = document.querySelector('#admin-token-status');
+const saveAdminTokenButton = document.querySelector('#save-admin-token-button');
+const clearAdminTokenButton = document.querySelector('#clear-admin-token-button');
+
 const form = document.querySelector('#resolve-form');
 const input = document.querySelector('#input');
 const serverDownload = document.querySelector('#server-download');
@@ -56,6 +63,7 @@ const copyButtons = Array.from(document.querySelectorAll('[data-copy-target]'));
 
 let latestMedia = [];
 let latestTitle = 'rednote-media';
+let adminToken = '';
 
 function setMessage(element, message, tone = '') {
   element.textContent = message;
@@ -76,11 +84,24 @@ function switchTab(tabId) {
 }
 
 async function fetchJson(url, options) {
-  const response = await fetch(url, options);
-  const data = await response.json();
+  const requestOptions = options ? { ...options } : {};
+  const headers = new Headers(requestOptions.headers || {});
 
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || '请求失败');
+  if (adminToken && !headers.has('X-Admin-Token')) {
+    headers.set('X-Admin-Token', adminToken);
+  }
+
+  requestOptions.headers = headers;
+
+  const response = await fetch(url, requestOptions);
+  const data = await response.json().catch(() => null);
+
+  if (response.status === 401) {
+    throw new Error('缺少或错误的 Admin Token，请先在页面顶部填写。');
+  }
+
+  if (!response.ok || !data?.ok) {
+    throw new Error(data?.error || '请求失败');
   }
 
   return data;
@@ -100,6 +121,10 @@ function setTelegramStatus(message, tone = '') {
 
 function setOpenClawStatus(message, tone = '') {
   setMessage(openclawStatus, message, tone);
+}
+
+function setAdminTokenStatus(message, tone = '') {
+  setMessage(adminTokenStatus, message, tone);
 }
 
 function countConfiguredChatIds(value) {
@@ -209,6 +234,12 @@ function loadSavedCookie() {
   setCookieStatus('已从本地浏览器恢复保存的 Cookie。');
 }
 
+function loadSavedAdminToken() {
+  adminToken = window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || '';
+  adminTokenInput.value = adminToken;
+  setAdminTokenStatus(adminToken ? '已从本地浏览器恢复 Admin Token。' : '当前没有保存 Admin Token。');
+}
+
 function saveCookieLocally() {
   const value = cookieInput.value.trim();
   if (!value) {
@@ -225,6 +256,38 @@ function clearCookieLocally() {
   cookieInput.value = '';
   window.localStorage.removeItem(COOKIE_STORAGE_KEY);
   setCookieStatus('Cookie 已清空。');
+}
+
+async function saveAdminTokenLocally() {
+  adminToken = adminTokenInput.value.trim();
+  if (!adminToken) {
+    window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    setAdminTokenStatus('输入为空，已移除本地保存的 Admin Token。');
+    return;
+  }
+
+  window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, adminToken);
+  setAdminTokenStatus('Admin Token 已保存，正在验证...', '');
+
+  try {
+    await loadDashboard();
+    setAdminTokenStatus('Admin Token 已保存并验证通过。', 'success');
+  } catch (error) {
+    setAdminTokenStatus(error instanceof Error ? error.message : 'Admin Token 验证失败', 'error');
+  }
+}
+
+async function clearAdminTokenLocally() {
+  adminToken = '';
+  adminTokenInput.value = '';
+  window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+  setAdminTokenStatus('Admin Token 已清空。');
+
+  try {
+    await loadDashboard();
+  } catch {
+    // Clearing the token may intentionally remove access to admin-only endpoints.
+  }
 }
 
 async function importCookieFile(file) {
@@ -657,6 +720,8 @@ form.addEventListener('submit', onSubmit);
 downloadAllButton.addEventListener('click', triggerBrowserDownloads);
 saveCookieButton.addEventListener('click', saveCookieLocally);
 clearCookieButton.addEventListener('click', clearCookieLocally);
+saveAdminTokenButton.addEventListener('click', saveAdminTokenLocally);
+clearAdminTokenButton.addEventListener('click', clearAdminTokenLocally);
 cookieFileInput.addEventListener('change', onCookieFileChange);
 cookieDropzone.addEventListener('click', openCookiePicker);
 cookieDropzone.addEventListener('keydown', (event) => {
@@ -680,8 +745,10 @@ copyButtons.forEach((button) => {
   button.addEventListener('click', copyTextFromTarget);
 });
 
+loadSavedAdminToken();
 loadSavedCookie();
 loadDashboard().catch((error) => {
+  setAdminTokenStatus(error instanceof Error ? error.message : '初始化配置失败', 'error');
   setTelegramStatus(error instanceof Error ? error.message : '初始化配置失败', 'error');
   setOpenClawStatus(error instanceof Error ? error.message : '初始化配置失败', 'error');
 });

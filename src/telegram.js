@@ -1,4 +1,11 @@
+import { createWriteStream, openAsBlob } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
+import { normalizeEnvBoolean } from './config.js';
 import { extractFirstUrl, fetchMediaResponse, resolveNote, sanitizeFileName } from './xhs.js';
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
@@ -26,6 +33,10 @@ function trimCaption(text) {
   }
 
   return `${source.slice(0, MAX_CAPTION_LENGTH - 1)}…`;
+}
+
+function isAbortError(error) {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 export function buildTelegramCaption(note) {
@@ -82,6 +93,30 @@ export function getTelegramMediaGroupType(item, deliveryMode = 'document') {
   return 'document';
 }
 
+async function cleanupTempDirs(tempDirs) {
+  await Promise.allSettled(
+    tempDirs
+      .filter(Boolean)
+      .map((tempDir) => rm(tempDir, { recursive: true, force: true })),
+  );
+}
+
+async function materializeTelegramUpload(item, note, index) {
+  const { response } = await fetchMediaResponse(item.url);
+  const contentType = response.headers.get('content-type') || (item.type === 'video' ? 'video/mp4' : 'image/jpeg');
+  const fileName = inferTelegramFileName(item, note, index);
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-telegram-'));
+  const tempPath = path.join(tempDir, fileName);
+
+  await pipeline(Readable.fromWeb(response.body), createWriteStream(tempPath));
+
+  return {
+    tempDir,
+    fileBlob: await openAsBlob(tempPath, { type: contentType }),
+    fileName,
+  };
+}
+
 async function telegramRequest(token, method, payload, isMultipart = false) {
   const response = await fetch(toTelegramApiUrl(token, method), {
     method: 'POST',
@@ -114,59 +149,63 @@ async function sendChatAction(token, chatId, action) {
 }
 
 async function uploadMediaAsTelegramFile(token, method, fieldName, chatId, item, note, index, options = {}) {
-  const { response } = await fetchMediaResponse(item.url);
-  const contentType = response.headers.get('content-type') || (item.type === 'video' ? 'video/mp4' : 'image/jpeg');
-  const fileName = inferTelegramFileName(item, note, index);
+  const upload = await materializeTelegramUpload(item, note, index);
   const body = new FormData();
 
-  body.append('chat_id', String(chatId));
-  if (options.replyToMessageId) {
-    body.append('reply_to_message_id', String(options.replyToMessageId));
-  }
-  if (options.caption) {
-    body.append('caption', options.caption);
-  }
+  try {
+    body.append('chat_id', String(chatId));
+    if (options.replyToMessageId) {
+      body.append('reply_to_message_id', String(options.replyToMessageId));
+    }
+    if (options.caption) {
+      body.append('caption', options.caption);
+    }
 
-  const fileBlob = new Blob([await response.arrayBuffer()], { type: contentType });
-  body.append(fieldName, fileBlob, fileName);
+    body.append(fieldName, upload.fileBlob, upload.fileName);
 
-  return telegramRequest(token, method, body, true);
+    return await telegramRequest(token, method, body, true);
+  } finally {
+    await cleanupTempDirs([upload.tempDir]);
+  }
 }
 
 async function uploadMediaGroup(token, chatId, note, items, startIndex, options = {}) {
   const deliveryMode = options.deliveryMode || 'document';
   const body = new FormData();
   const mediaEntries = [];
+  const tempDirs = [];
 
-  body.append('chat_id', String(chatId));
-  if (options.replyToMessageId) {
-    body.append('reply_to_message_id', String(options.replyToMessageId));
-  }
-
-  for (const [offset, item] of items.entries()) {
-    const itemIndex = startIndex + offset;
-    const { response } = await fetchMediaResponse(item.url);
-    const contentType = response.headers.get('content-type') || (item.type === 'video' ? 'video/mp4' : 'image/jpeg');
-    const fieldName = `media_${itemIndex}`;
-    const fileName = inferTelegramFileName(item, note, itemIndex);
-    const fileBlob = new Blob([await response.arrayBuffer()], { type: contentType });
-
-    body.append(fieldName, fileBlob, fileName);
-
-    const mediaEntry = {
-      type: getTelegramMediaGroupType(item, deliveryMode),
-      media: `attach://${fieldName}`,
-    };
-
-    if (offset === 0 && options.caption) {
-      mediaEntry.caption = options.caption;
+  try {
+    body.append('chat_id', String(chatId));
+    if (options.replyToMessageId) {
+      body.append('reply_to_message_id', String(options.replyToMessageId));
     }
 
-    mediaEntries.push(mediaEntry);
-  }
+    for (const [offset, item] of items.entries()) {
+      const itemIndex = startIndex + offset;
+      const fieldName = `media_${itemIndex}`;
+      const upload = await materializeTelegramUpload(item, note, itemIndex);
 
-  body.append('media', JSON.stringify(mediaEntries));
-  return telegramRequest(token, 'sendMediaGroup', body, true);
+      tempDirs.push(upload.tempDir);
+      body.append(fieldName, upload.fileBlob, upload.fileName);
+
+      const mediaEntry = {
+        type: getTelegramMediaGroupType(item, deliveryMode),
+        media: `attach://${fieldName}`,
+      };
+
+      if (offset === 0 && options.caption) {
+        mediaEntry.caption = options.caption;
+      }
+
+      mediaEntries.push(mediaEntry);
+    }
+
+    body.append('media', JSON.stringify(mediaEntries));
+    return await telegramRequest(token, 'sendMediaGroup', body, true);
+  } finally {
+    await cleanupTempDirs(tempDirs);
+  }
 }
 
 async function sendResolvedMediaSequential(token, chatId, note, options = {}) {
@@ -250,8 +289,15 @@ export class TelegramBotRunner {
     this.token = options.token;
     this.allowedChatIds = options.allowedChatIds;
     this.deliveryMode = options.deliveryMode || 'document';
-    this.offset = 0;
+    this.offset = Number.isInteger(options.initialOffset) && options.initialOffset >= 0
+      ? options.initialOffset
+      : 0;
+    this.onOffsetChange = typeof options.onOffsetChange === 'function'
+      ? options.onOffsetChange
+      : null;
     this.running = false;
+    this.loopPromise = null;
+    this.pollController = null;
   }
 
   async fetchUpdates() {
@@ -259,13 +305,25 @@ export class TelegramBotRunner {
     url.searchParams.set('timeout', String(POLL_TIMEOUT_SECONDS));
     url.searchParams.set('offset', String(this.offset));
 
-    const response = await fetch(url, { method: 'GET' });
-    const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data?.description || `Telegram polling failed (${response.status})`);
-    }
+    const controller = new AbortController();
+    this.pollController = controller;
 
-    return data.result || [];
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error(data?.description || `Telegram polling failed (${response.status})`);
+      }
+
+      return data.result || [];
+    } finally {
+      if (this.pollController === controller) {
+        this.pollController = null;
+      }
+    }
   }
 
   async handleMessage(message) {
@@ -312,39 +370,74 @@ export class TelegramBotRunner {
 
   async pollOnce() {
     const updates = await this.fetchUpdates();
+    const nextOffset = updates.reduce(
+      (maxOffset, update) => Math.max(maxOffset, (update.update_id || 0) + 1),
+      this.offset,
+    );
+
+    if (nextOffset !== this.offset) {
+      this.offset = nextOffset;
+      if (this.onOffsetChange) {
+        await this.onOffsetChange(this.offset);
+      }
+    }
+
     for (const update of updates) {
-      this.offset = Math.max(this.offset, (update.update_id || 0) + 1);
+      if (!this.running) {
+        return;
+      }
+
       if (update.message) {
         await this.handleMessage(update.message);
       }
     }
   }
 
-  async start() {
-    if (this.running) {
-      return;
+  start() {
+    if (this.loopPromise) {
+      return this.loopPromise;
     }
 
     this.running = true;
+    this.loopPromise = (async () => {
+      while (this.running) {
+        try {
+          await this.pollOnce();
+        } catch (error) {
+          if (!this.running && isAbortError(error)) {
+            break;
+          }
 
-    while (this.running) {
-      try {
-        await this.pollOnce();
-      } catch (error) {
-        console.error('[telegram] polling error:', error instanceof Error ? error.message : error);
-        await delay(3000);
+          console.error('[telegram] polling error:', error instanceof Error ? error.message : error);
+          if (!this.running) {
+            break;
+          }
+          await delay(3000);
+        }
       }
-    }
+    })().finally(() => {
+      this.running = false;
+      this.loopPromise = null;
+    });
+
+    return this.loopPromise;
   }
 
-  stop() {
+  async stop() {
     this.running = false;
+    if (this.pollController) {
+      this.pollController.abort();
+    }
+
+    if (this.loopPromise) {
+      await this.loopPromise.catch(() => {});
+    }
   }
 }
 
 export function getTelegramConfigFromEnv() {
   const token = process.env.TELEGRAM_BOT_TOKEN || '';
-  if (!token) {
+  if (!token || !normalizeEnvBoolean(process.env.TELEGRAM_ENABLED, true)) {
     return null;
   }
 

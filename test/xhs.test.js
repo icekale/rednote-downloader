@@ -8,6 +8,7 @@ import {
   extractImages,
   extractTwitterMedia,
   extractVideo,
+  fetchMediaResponse,
   getNoteData,
   normalizeTwitterPhotoUrl,
   parseNoteFromHtml,
@@ -202,4 +203,41 @@ test('parseTweetFromApiPayload converts fxtwitter response into note shape', () 
 test('ensureAllowedMediaUrl accepts twitter media hosts', () => {
   assert.doesNotThrow(() => ensureAllowedMediaUrl('https://pbs.twimg.com/media/Example123.jpg?format=jpg&name=orig'));
   assert.doesNotThrow(() => ensureAllowedMediaUrl('https://video.twimg.com/amplify_video/demo/vid/avc1/720x1280/high.mp4?tag=21'));
+});
+
+test('fetchMediaResponse only applies timeout until headers arrive', async () => {
+  const originalFetch = global.fetch;
+  let capturedSignal;
+
+  global.fetch = async (url, options = {}) => {
+    capturedSignal = options.signal;
+
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          setTimeout(() => controller.close(), 25);
+        },
+      }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'image/jpeg',
+        },
+      },
+    );
+  };
+
+  try {
+    const result = await fetchMediaResponse('https://ci.xiaohongshu.com/demo.jpg', {
+      timeoutMs: 10,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    assert.equal(capturedSignal.aborted, false);
+    assert.equal((await result.response.arrayBuffer()).byteLength, 3);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });

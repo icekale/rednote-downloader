@@ -7,12 +7,16 @@ import { downloadMedia, fetchMediaResponse, resolveNote, sanitizeFileName } from
 import { TelegramBotRunner, parseAllowedChatIds } from './telegram.js';
 import {
   getAppConfigPath,
+  getAppStatePath,
   getPublicConfig,
+  loadAppState,
   loadAppConfig,
   mergeAppConfig,
   normalizeDeliveryMode,
+  normalizeEnvBoolean,
   normalizeServiceBaseUrl,
   saveAppConfig,
+  saveAppState,
 } from './config.js';
 import { buildOpenClawResolvePayload, buildOpenClawTemplate } from './openclaw.js';
 
@@ -20,7 +24,22 @@ const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '127.0.0.1';
 const DOWNLOAD_DIR = path.resolve(process.env.DOWNLOAD_DIR || path.join(process.cwd(), 'data'));
 const APP_CONFIG_PATH = getAppConfigPath(process.env, DOWNLOAD_DIR);
+const APP_STATE_PATH = getAppStatePath(process.env, DOWNLOAD_DIR, APP_CONFIG_PATH);
 const PUBLIC_DIR = path.join(process.cwd(), 'public');
+const ADMIN_TOKEN = (process.env.REDNOTE_ADMIN_TOKEN || '').trim();
+const CORS_ALLOWED_ORIGINS = new Set(
+  String(process.env.CORS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
+const ADMIN_HEADER_NAME = 'X-Admin-Token';
+const ADMIN_PATHS = new Set([
+  '/api/config',
+  '/api/telegram/status',
+  '/api/diagnostics',
+  '/api/openclaw/template',
+]);
 
 const STATIC_ROUTES = new Map([
   ['/', 'index.html'],
@@ -29,11 +48,53 @@ const STATIC_ROUTES = new Map([
   ['/styles.css', 'styles.css'],
 ]);
 
-function sendJson(response, statusCode, payload) {
-  response.writeHead(statusCode, {
-    'Access-Control-Allow-Headers': 'Content-Type',
+function normalizeOrigin(value) {
+  try {
+    const url = new URL(value);
+    url.pathname = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function buildCorsHeaders(request) {
+  const origin = normalizeOrigin(request?.headers.origin || '');
+  if (!origin) {
+    return {};
+  }
+
+  const requestOrigin = normalizeOrigin(getRequestOrigin(request));
+  if (origin !== requestOrigin && !CORS_ALLOWED_ORIGINS.has(origin)) {
+    return {};
+  }
+
+  return {
+    'Access-Control-Allow-Headers': `Content-Type, ${ADMIN_HEADER_NAME}`,
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': origin,
+    Vary: 'Origin',
+  };
+}
+
+function sendJson(...args) {
+  let request = null;
+  let response;
+  let statusCode;
+  let payload;
+  let extraHeaders = {};
+
+  if (args.length >= 4) {
+    [request, response, statusCode, payload, extraHeaders = {}] = args;
+  } else {
+    [response, statusCode, payload, extraHeaders = {}] = args;
+  }
+
+  response.writeHead(statusCode, {
+    ...buildCorsHeaders(request),
+    ...extraHeaders,
     'Content-Type': 'application/json; charset=utf-8',
   });
   response.end(JSON.stringify(payload, null, 2));
@@ -114,12 +175,34 @@ function getRequestOrigin(request) {
   return `${protocol}://${host}`.replace(/\/$/, '');
 }
 
+function isAdminPath(pathname) {
+  return ADMIN_PATHS.has(pathname);
+}
+
+function isAdminAuthorized(request) {
+  if (!ADMIN_TOKEN) {
+    return true;
+  }
+
+  return request.headers['x-admin-token'] === ADMIN_TOKEN;
+}
+
+function sendAdminUnauthorized(request, response) {
+  sendJson(request, response, 401, {
+    ok: false,
+    error: `Admin token required. Set the ${ADMIN_HEADER_NAME} header or REDNOTE_ADMIN_TOKEN in the UI.`,
+  }, {
+    'Cache-Control': 'no-store',
+  });
+}
+
 function buildTelegramRuntimeConfig(config) {
   const saved = config?.telegram || {};
   const hasSavedToken = Boolean(saved.botToken);
   const token = hasSavedToken ? saved.botToken : (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+  const envEnabled = normalizeEnvBoolean(process.env.TELEGRAM_ENABLED, true);
 
-  if (!token) {
+  if (!envEnabled || !token) {
     return null;
   }
 
@@ -143,22 +226,41 @@ function buildTelegramRuntimeConfig(config) {
 }
 
 let appConfig = await loadAppConfig(APP_CONFIG_PATH);
+let appState = await loadAppState(APP_STATE_PATH);
 let telegramBot = null;
 let telegramRuntimeConfig = null;
+
+async function persistTelegramOffset(offset) {
+  if (!Number.isInteger(offset) || offset < 0 || offset === appState.telegram.updateOffset) {
+    return;
+  }
+
+  appState = await saveAppState(APP_STATE_PATH, {
+    ...appState,
+    telegram: {
+      ...appState.telegram,
+      updateOffset: offset,
+    },
+  });
+}
 
 async function applyTelegramRuntime() {
   const nextRuntime = buildTelegramRuntimeConfig(appConfig);
 
   if (telegramBot) {
-    telegramBot.stop();
+    await telegramBot.stop();
     telegramBot = null;
   }
 
   telegramRuntimeConfig = nextRuntime;
 
   if (nextRuntime) {
-    telegramBot = new TelegramBotRunner(nextRuntime);
-    telegramBot.start();
+    telegramBot = new TelegramBotRunner({
+      ...nextRuntime,
+      initialOffset: appState.telegram.updateOffset,
+      onOffsetChange: persistTelegramOffset,
+    });
+    void telegramBot.start();
   }
 }
 
@@ -170,7 +272,7 @@ async function handleResolve(request, response, url) {
   const download = body.download ?? queryDownload === 'true';
 
   if (!input || typeof input !== 'string') {
-    sendJson(response, 400, {
+    sendJson(request, response, 400, {
       ok: false,
       error: 'Missing required `input` string. You can send a Xiaohongshu share text, an x.com/twitter.com URL, or the full share text.',
     });
@@ -182,7 +284,7 @@ async function handleResolve(request, response, url) {
   });
 
   if (!download) {
-    sendJson(response, 200, {
+    sendJson(request, response, 200, {
       ok: true,
       note,
     });
@@ -197,7 +299,7 @@ async function handleResolve(request, response, url) {
     { cookie: body.cookie },
   );
 
-  sendJson(response, 200, {
+  sendJson(request, response, 200, {
     ok: true,
     note: {
       ...note,
@@ -231,7 +333,7 @@ async function handleMediaProxy(request, response, url) {
   const requestedName = url.searchParams.get('filename');
 
   if (!target) {
-    sendJson(response, 400, {
+    sendJson(request, response, 400, {
       ok: false,
       error: 'Missing required `url` query parameter.',
     });
@@ -269,8 +371,8 @@ async function handleMediaProxy(request, response, url) {
   await pipeline(Readable.fromWeb(proxied.response.body), response);
 }
 
-async function handleConfigRead(response) {
-  sendJson(response, 200, {
+async function handleConfigRead(request, response) {
+  sendJson(request, response, 200, {
     ok: true,
     config: getPublicConfig(appConfig),
     configPath: APP_CONFIG_PATH,
@@ -283,16 +385,16 @@ async function handleConfigWrite(request, response) {
   appConfig = await saveAppConfig(APP_CONFIG_PATH, appConfig);
   await applyTelegramRuntime();
 
-  sendJson(response, 200, {
+  sendJson(request, response, 200, {
     ok: true,
     config: getPublicConfig(appConfig),
     configPath: APP_CONFIG_PATH,
   });
 }
 
-async function handleTelegramStatus(response) {
+async function handleTelegramStatus(request, response) {
   const config = getPublicConfig(appConfig);
-  sendJson(response, 200, {
+  sendJson(request, response, 200, {
     ok: true,
     telegram: {
       ...config.telegram,
@@ -391,6 +493,7 @@ async function handleDiagnostics(request, response) {
       port: PORT,
       downloadDir: DOWNLOAD_DIR,
       configPath: APP_CONFIG_PATH,
+      statePath: APP_STATE_PATH,
     },
     telegram: {
       ...config.telegram,
@@ -415,7 +518,7 @@ async function handleDiagnostics(request, response) {
 
   diagnostics.hints = buildDiagnosticsHints(diagnostics);
 
-  sendJson(response, 200, {
+  sendJson(request, response, 200, {
     ok: true,
     diagnostics,
   });
@@ -432,7 +535,7 @@ async function handleOpenClawTemplate(request, response) {
     nodeCommand: 'node',
   });
 
-  sendJson(response, 200, {
+  sendJson(request, response, 200, {
     ok: true,
     openclaw: template,
   });
@@ -445,7 +548,7 @@ async function handleOpenClawResolve(request, response, url) {
   const cookie = body.cookie;
 
   if (!input || typeof input !== 'string') {
-    sendJson(response, 400, {
+    sendJson(request, response, 400, {
       ok: false,
       error: 'Missing required `input` string.',
     });
@@ -459,7 +562,7 @@ async function handleOpenClawResolve(request, response, url) {
     || getRequestOrigin(request),
   );
 
-  sendJson(response, 200, {
+  sendJson(request, response, 200, {
     ok: true,
     note,
     openclaw: buildOpenClawResolvePayload(note, { baseUrl }),
@@ -470,24 +573,26 @@ const server = http.createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
 
   if (request.method === 'OPTIONS') {
-    response.writeHead(204, {
-      'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Origin': '*',
-    });
+    response.writeHead(204, buildCorsHeaders(request));
     response.end();
     return;
   }
 
   try {
+    if (isAdminPath(url.pathname) && !isAdminAuthorized(request)) {
+      sendAdminUnauthorized(request, response);
+      return;
+    }
+
     if (request.method === 'GET' && await handleStatic(response, url.pathname)) {
       return;
     }
 
     if (request.method === 'GET' && url.pathname === '/healthz') {
-      sendJson(response, 200, {
+      sendJson(request, response, 200, {
         ok: true,
         service: 'rednote-downloader',
+        adminTokenRequired: Boolean(ADMIN_TOKEN),
       });
       return;
     }
@@ -498,7 +603,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/telegram/status') {
-      await handleTelegramStatus(response);
+      await handleTelegramStatus(request, response);
       return;
     }
 
@@ -508,7 +613,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/config') {
-      await handleConfigRead(response);
+      await handleConfigRead(request, response);
       return;
     }
 
@@ -532,12 +637,12 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    sendJson(response, 404, {
+    sendJson(request, response, 404, {
       ok: false,
       error: 'Not found',
     });
   } catch (error) {
-    sendJson(response, 502, {
+    sendJson(request, response, 502, {
       ok: false,
       error: error instanceof Error ? error.message : 'Unknown error',
     });
@@ -551,10 +656,18 @@ server.listen(PORT, HOST, () => {
   console.log(`rednote-downloader listening on http://${HOST}:${PORT}`);
   console.log(`download dir: ${DOWNLOAD_DIR}`);
   console.log(`config file: ${APP_CONFIG_PATH}`);
+  console.log(`state file: ${APP_STATE_PATH}`);
+
+  if (ADMIN_TOKEN) {
+    console.log('[security] admin token protection enabled');
+  } else if (HOST !== '127.0.0.1') {
+    console.warn('[security] REDNOTE_ADMIN_TOKEN is not set; avoid exposing admin endpoints to untrusted networks.');
+  }
 
   if (telegramRuntimeConfig) {
     console.log('[telegram] bot mode enabled');
     console.log(`[telegram] delivery mode: ${telegramRuntimeConfig.deliveryMode}`);
+    console.log(`[telegram] update offset: ${appState.telegram.updateOffset}`);
     if (telegramRuntimeConfig.allowedChatIds.size) {
       console.log(`[telegram] restricted chats: ${[...telegramRuntimeConfig.allowedChatIds].join(', ')}`);
     }
