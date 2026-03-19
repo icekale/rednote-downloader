@@ -166,6 +166,18 @@ docker compose -f compose.hub.yaml up -d
 
 `compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.12`。
 
+如果你是 Unraid 用户，可以直接使用单独的：
+
+```bash
+docker compose -f compose.unraid.yaml up -d
+```
+
+`compose.unraid.yaml` 默认已经按 Unraid 常见场景预填：
+
+- `PUID=99`
+- `PGID=100`
+- `REDNOTE_DATA_DIR=/mnt/user/appdata/rednote`
+
 Docker 默认会把容器内目录拆成：
 
 ```text
@@ -177,6 +189,12 @@ Docker 默认会把容器内目录拆成：
 
 ```bash
 REDNOTE_DATA_DIR=/volume1/docker/rednote docker compose -f compose.hub.yaml up -d
+```
+
+Unraid 示例：
+
+```bash
+REDNOTE_DATA_DIR=/mnt/user/appdata/rednote docker compose -f compose.unraid.yaml up -d
 ```
 
 如果你在 Unraid 上部署，除了把数据目录映射到 `/data`，还建议显式设置：
@@ -330,6 +348,8 @@ src/mcp-server.js
 ├── Dockerfile
 ├── README.md
 ├── compose.yaml
+├── compose.hub.yaml
+├── compose.unraid.yaml
 ├── package.json
 ├── src
 │   ├── server.js

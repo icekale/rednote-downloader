@@ -78,6 +78,20 @@ services:
     restart: unless-stopped
 ```
 
+## Unraid Compose
+
+如果你跑在 Unraid 上，仓库里也单独准备了一份 `compose.unraid.yaml`，不会覆盖原来的通用 compose。它默认使用：
+
+- `PUID=99`
+- `PGID=100`
+- `REDNOTE_DATA_DIR=/mnt/user/appdata/rednote`
+
+示例：
+
+```bash
+REDNOTE_DATA_DIR=/mnt/user/appdata/rednote docker compose -f compose.unraid.yaml up -d
+```
+
 ## 环境变量
 
 - `HOST`: 监听地址，默认 `0.0.0.0`

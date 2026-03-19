@@ -78,6 +78,20 @@ services:
     restart: unless-stopped
 ```
 
+## Unraid Compose
+
+If you run this on Unraid, there is also a separate `compose.unraid.yaml` in the repo so you don't have to overwrite the generic Compose example. It defaults to:
+
+- `PUID=99`
+- `PGID=100`
+- `REDNOTE_DATA_DIR=/mnt/user/appdata/rednote`
+
+Example:
+
+```bash
+REDNOTE_DATA_DIR=/mnt/user/appdata/rednote docker compose -f compose.unraid.yaml up -d
+```
+
 ## Environment Variables
 
 - `HOST`: bind address, default `0.0.0.0`
