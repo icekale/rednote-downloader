@@ -121,6 +121,16 @@ select {
   overflow: hidden;
 }
 
+.topbar-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .topbar-inner::before,
 .topbar-inner::after {
   content: "";
@@ -154,6 +164,41 @@ select {
   align-items: baseline;
   gap: 0;
   min-width: 0;
+}
+
+.lang-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(10, 37, 64, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+.lang-button {
+  min-width: 48px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.lang-button:hover {
+  color: var(--text);
+  background: rgba(99, 91, 255, 0.08);
+}
+
+.lang-button.active {
+  background: linear-gradient(135deg, rgba(99, 91, 255, 0.18), rgba(99, 91, 255, 0.08));
+  color: var(--primary-strong);
+  box-shadow: inset 0 0 0 1px rgba(99, 91, 255, 0.12);
 }
 
 .brand strong {
@@ -679,6 +724,20 @@ select:focus {
   white-space: pre-wrap;
 }
 
+.result-list {
+  display: grid;
+  gap: 18px;
+}
+
+.result-note {
+  display: grid;
+  gap: 14px;
+}
+
+.result-note-head {
+  margin-bottom: 0;
+}
+
 .inline-link {
   display: inline-flex;
   align-items: center;
@@ -999,6 +1058,11 @@ select:focus {
   .brand {
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  .topbar-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .tabs {

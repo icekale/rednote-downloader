@@ -51,6 +51,32 @@ export function extractFirstUrl(input) {
   return match[0].replace(/[)\]}>,.;!?]+$/g, '');
 }
 
+export function extractAllUrls(input) {
+  if (typeof input !== 'string') {
+    throw new Error('input must be a string');
+  }
+
+  const matches = input.match(/https?:\/\/[^\s]+/ig) || [];
+  const seen = new Set();
+  const urls = [];
+
+  for (const rawMatch of matches) {
+    const cleaned = rawMatch.replace(/[)\]}>,.;!?]+$/g, '');
+    if (!cleaned || seen.has(cleaned)) {
+      continue;
+    }
+
+    seen.add(cleaned);
+    urls.push(cleaned);
+  }
+
+  if (!urls.length) {
+    throw new Error('No URL found in input');
+  }
+
+  return urls;
+}
+
 export function sanitizeFileName(input, fallback = 'note') {
   const safe = String(input || '')
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')

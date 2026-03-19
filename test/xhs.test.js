@@ -7,6 +7,7 @@ import {
   buildFixTwitterApiUrl,
   deriveNoteFileStem,
   downloadMedia,
+  extractAllUrls,
   deriveOriginalImageUrl,
   ensureAllowedMediaUrl,
   extractFirstUrl,
@@ -24,6 +25,19 @@ import {
 test('extractFirstUrl pulls URL from share text', () => {
   const input = '23 小明发布了一篇小红书笔记，快来看吧！ 😆 http://xhslink.com/a/abc123 复制本条信息';
   assert.equal(extractFirstUrl(input), 'http://xhslink.com/a/abc123');
+});
+
+test('extractAllUrls returns all unique URLs in input order', () => {
+  const input = `
+https://x.com/demo/status/1
+第二行还有一个 https://www.xiaohongshu.com/explore/abc123?xsec_token=demo
+重复一次 https://x.com/demo/status/1
+  `;
+
+  assert.deepEqual(extractAllUrls(input), [
+    'https://x.com/demo/status/1',
+    'https://www.xiaohongshu.com/explore/abc123?xsec_token=demo',
+  ]);
 });
 
 test('deriveOriginalImageUrl converts preview URL into ci download URL', () => {

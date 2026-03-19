@@ -4,7 +4,7 @@ import { Readable } from 'node:stream';
 import { access, mkdir, readFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import packageMeta from '../package.json' with { type: 'json' };
-import { downloadMedia, fetchMediaResponse, resolveNote, sanitizeFileName } from './xhs.js';
+import { downloadMedia, extractAllUrls, fetchMediaResponse, resolveNote, sanitizeFileName } from './xhs.js';
 import { TelegramBotRunner, parseAllowedChatIds } from './telegram.js';
 import {
   getAppConfigPath,
@@ -62,6 +62,10 @@ function normalizeOrigin(value) {
   } catch {
     return '';
   }
+}
+
+function normalizeUiLanguage(value) {
+  return String(value || '').trim().toLowerCase() === 'en' ? 'en' : 'zh';
 }
 
 function buildCorsHeaders(request) {
@@ -290,6 +294,65 @@ async function handleResolve(request, response, url) {
     return;
   }
 
+  const inputs = extractAllUrls(input);
+
+  if (inputs.length > 1) {
+    const results = [];
+
+    for (const resolvedInput of inputs) {
+      try {
+        const note = await resolveNote(resolvedInput, {
+          cookie: body.cookie,
+        });
+
+        if (!download) {
+          results.push({
+            input: resolvedInput,
+            ok: true,
+            note,
+          });
+          continue;
+        }
+
+        const downloaded = await downloadMedia(
+          note.media,
+          note.title,
+          note.noteId,
+          DOWNLOAD_DIR,
+          {
+            cookie: body.cookie,
+            noteDescription: note.description,
+          },
+        );
+
+        results.push({
+          input: resolvedInput,
+          ok: true,
+          note: {
+            ...note,
+            media: downloaded.files,
+          },
+          download: {
+            outputDir: downloaded.outputDir,
+          },
+        });
+      } catch (error) {
+        results.push({
+          input: resolvedInput,
+          ok: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    sendJson(request, response, 200, {
+      ok: true,
+      batch: true,
+      results,
+    });
+    return;
+  }
+
   const note = await resolveNote(input, {
     cookie: body.cookie,
   });
@@ -471,27 +534,48 @@ async function probeJsonEndpoint(url) {
   }
 }
 
-function buildDiagnosticsHints(context) {
+function buildDiagnosticsHints(context, language = 'zh') {
   const hints = [];
+  const isEnglish = language === 'en';
 
   if (context.telegram.enabled && !context.telegram.runtimeEnabled) {
-    hints.push('Telegram 在配置里已启用，但运行态没有拉起。通常是 Bot Token 缺失或保存后尚未生效。');
+    hints.push(
+      isEnglish
+        ? 'Telegram is enabled in config, but the runtime is not running. This is usually caused by a missing bot token or a config change that has not been applied yet.'
+        : 'Telegram 在配置里已启用，但运行态没有拉起。通常是 Bot Token 缺失或保存后尚未生效。',
+    );
   }
 
   if (!context.telegram.botTokenSet) {
-    hints.push('当前没有保存 Telegram Bot Token，Telegram 标签页里的“图形化 Bot 配置”还需要补全。');
+    hints.push(
+      isEnglish
+        ? 'No Telegram bot token is currently saved. Finish the setup in the Telegram tab before testing the bot workflow.'
+        : '当前没有保存 Telegram Bot Token，Telegram 标签页里的“图形化 Bot 配置”还需要补全。',
+    );
   }
 
   if (!context.openclaw.mcpScriptExists) {
-    hints.push('OpenClaw 的 MCP 脚本路径当前不可读。若 rednote 在 Docker、OpenClaw 在宿主机，请填写宿主机真实路径。');
+    hints.push(
+      isEnglish
+        ? 'The configured OpenClaw MCP script path is not readable. If rednote runs in Docker and OpenClaw runs on the host, use the real host path instead of an in-container path.'
+        : 'OpenClaw 的 MCP 脚本路径当前不可读。若 rednote 在 Docker、OpenClaw 在宿主机，请填写宿主机真实路径。',
+    );
   }
 
   if (!context.checks.configuredServiceBase.ok) {
-    hints.push('配置中的 OpenClaw Service Base URL 没有通过健康检查，OpenClaw 调用 rednote 时可能会连不上。');
+    hints.push(
+      isEnglish
+        ? 'The configured OpenClaw service base URL did not pass the health check, so OpenClaw may fail to connect back to rednote.'
+        : '配置中的 OpenClaw Service Base URL 没有通过健康检查，OpenClaw 调用 rednote 时可能会连不上。',
+    );
   }
 
   if (!context.telegram.allowedChatIdsConfigured) {
-    hints.push('Telegram 目前没有配置 Chat ID 白名单，默认会接受所有会话。');
+    hints.push(
+      isEnglish
+        ? 'Telegram currently has no Chat ID allowlist configured, so the bot will accept messages from any chat by default.'
+        : 'Telegram 目前没有配置 Chat ID 白名单，默认会接受所有会话。',
+    );
   }
 
   return hints;
@@ -500,6 +584,8 @@ function buildDiagnosticsHints(context) {
 async function handleDiagnostics(request, response) {
   const config = getPublicConfig(appConfig);
   const origin = getRequestOrigin(request);
+  const url = new URL(request.url, origin);
+  const language = normalizeUiLanguage(url.searchParams.get('lang'));
   const serviceBaseUrl = normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl || origin);
   const template = buildOpenClawTemplate({
     serviceBaseUrl,
@@ -547,7 +633,7 @@ async function handleDiagnostics(request, response) {
     },
   };
 
-  diagnostics.hints = buildDiagnosticsHints(diagnostics);
+  diagnostics.hints = buildDiagnosticsHints(diagnostics, language);
 
   sendJson(request, response, 200, {
     ok: true,
