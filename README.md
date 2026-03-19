@@ -144,8 +144,9 @@ docker build -t rednote-downloader .
 docker run -d \
   --name rednote-downloader \
   --restart unless-stopped \
-  --user "$(id -u):$(id -g)" \
   -p 3000:3000 \
+  -e PUID="$(id -u)" \
+  -e PGID="$(id -g)" \
   -e XHS_COOKIE='你的 cookie，可选' \
   -v "$(pwd)/data:/data" \
   rednote-downloader
@@ -163,7 +164,7 @@ docker compose up --build
 docker compose -f compose.hub.yaml up -d
 ```
 
-`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.11`。
+`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.12`。
 
 Docker 默认会把容器内目录拆成：
 
@@ -177,6 +178,15 @@ Docker 默认会把容器内目录拆成：
 ```bash
 REDNOTE_DATA_DIR=/volume1/docker/rednote docker compose -f compose.hub.yaml up -d
 ```
+
+如果你在 Unraid 上部署，除了把数据目录映射到 `/data`，还建议显式设置：
+
+```bash
+PUID=99
+PGID=100
+```
+
+这是 Unraid 默认 `nobody:users` 的常见 uid/gid。如果你的 share 使用了别的所有者，请改成和实际目录所有者一致的数字。
 
 ## Telegram Bot Mode
 
@@ -283,7 +293,7 @@ src/mcp-server.js
 
 - 文件位置：`.github/workflows/docker-publish.yml`
 - `push` 到 `main` 时自动推送 `latest`
-- 推送形如 `v0.2.11` 的 tag 时自动推送对应版本标签
+- 推送形如 `v0.2.12` 的 tag 时自动推送对应版本标签
 - 同时构建 `linux/amd64` 和 `linux/arm64`
 
 在 GitHub 仓库里补两个 Actions secrets 即可启用：

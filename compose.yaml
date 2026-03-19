@@ -1,12 +1,13 @@
 services:
   rednote-downloader:
     build: .
-    user: "${PUID:-1000}:${PGID:-1000}"
     ports:
       - "3000:3000"
     environment:
       HOST: 0.0.0.0
       PORT: "3000"
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       DOWNLOAD_DIR: /data/downloads
       APP_CONFIG_PATH: /data/config/.rednote-config.json
       APP_STATE_PATH: /data/config/.rednote-state.json

@@ -18,6 +18,7 @@ import {
   normalizeTwitterPhotoUrl,
   parseNoteFromHtml,
   parseTweetFromApiPayload,
+  withWritablePathHint,
 } from '../src/xhs.js';
 
 test('extractFirstUrl pulls URL from share text', () => {
@@ -150,6 +151,16 @@ test('deriveNoteFileStem prefers description over generic X title', () => {
     deriveNoteFileStem('X @imanstore_9', '皮肤很白的鲜肉弟弟，说这是吃过最大的，非常享受我的内射奖励', 'fallback'),
     '皮肤很白的鲜肉弟弟，说这是吃过最大的，非常享受我的内射奖励',
   );
+});
+
+test('withWritablePathHint explains bind-mount permission failures for NAS users', () => {
+  const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+  const wrapped = withWritablePathHint(error, '/data/downloads/demo');
+
+  assert.equal(wrapped.code, 'EACCES');
+  assert.match(wrapped.message, /Unable to write to \/data\/downloads\/demo/);
+  assert.match(wrapped.message, /PUID and PGID/);
+  assert.match(wrapped.message, /99:100/);
 });
 
 test('extractTwitterMedia keeps image order and picks best video variant', () => {

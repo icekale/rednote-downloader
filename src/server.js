@@ -674,6 +674,13 @@ const server = http.createServer(async (request, response) => {
       error: 'Not found',
     });
   } catch (error) {
+    console.error('[http] request failed', request.method, url.pathname, error);
+
+    if (response.headersSent || response.writableEnded) {
+      response.destroy();
+      return;
+    }
+
     sendJson(request, response, 502, {
       ok: false,
       error: error instanceof Error ? error.message : 'Unknown error',

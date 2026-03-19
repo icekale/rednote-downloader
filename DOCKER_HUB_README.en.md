@@ -31,13 +31,14 @@ This image is built for people who want a small local tool instead of a scraping
 docker run -d \
   --name rednote-downloader \
   --restart unless-stopped \
-  --user "$(id -u):$(id -g)" \
   -p 3000:3000 \
+  -e PUID="$(id -u)" \
+  -e PGID="$(id -g)" \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.11
+  icekale/rednote-downloader:v0.2.12
 ```
 
-If you prefer a floating tag, replace `v0.2.11` with `latest`.
+If you prefer a floating tag, replace `v0.2.12` with `latest`.
 
 Then open:
 
@@ -50,13 +51,15 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.11
+    image: icekale/rednote-downloader:v0.2.12
     container_name: rednote-downloader
     ports:
       - "3000:3000"
     environment:
       HOST: 0.0.0.0
       PORT: "3000"
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       DOWNLOAD_DIR: /data/downloads
       APP_CONFIG_PATH: /data/config/.rednote-config.json
       APP_STATE_PATH: /data/config/.rednote-state.json
@@ -70,7 +73,6 @@ services:
       TELEGRAM_DELIVERY_MODE: ${TELEGRAM_DELIVERY_MODE:-document}
       REDNOTE_ADMIN_TOKEN: ${REDNOTE_ADMIN_TOKEN:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
-    user: "${PUID:-1000}:${PGID:-1000}"
     volumes:
       - ${REDNOTE_DATA_DIR:-./data}:/data
     restart: unless-stopped
@@ -84,7 +86,7 @@ services:
 - `APP_CONFIG_PATH`: app config path, default `/data/config/.rednote-config.json`
 - `APP_STATE_PATH`: polling state path, default `/data/config/.rednote-state.json`
 - `REDNOTE_DATA_DIR`: compose-only host path mounted to `/data`; use an absolute path on NAS
-- `PUID` / `PGID`: compose-only uid/gid override for bind-mounted directories
+- `PUID` / `PGID`: runtime uid/gid used by the container entrypoint before the service starts
 - `XHS_COOKIE`: optional manual cookie header for protected RedNote posts
 - `XHS_USER_AGENT`: optional custom request user agent
 - `REQUEST_TIMEOUT_MS`: optional request timeout in milliseconds, default `15000`
@@ -106,6 +108,7 @@ services:
 - A Telegram bot token can only be long-polled by one running instance at a time; use `TELEGRAM_ENABLED=false` for temporary sidecar checks
 - Legacy config files stored directly under `/data` are copied into `/data/config` on first boot after upgrade
 - Legacy download folders stored directly under `/data` are moved into `/data/downloads` on first boot when they match the old naming pattern
+- On Unraid, `PUID=99` and `PGID=100` usually match the default `nobody:users` share ownership
 
 ## Best Fit
 

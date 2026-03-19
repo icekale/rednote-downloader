@@ -61,6 +61,27 @@ export function sanitizeFileName(input, fallback = 'note') {
   return safe || fallback;
 }
 
+export function withWritablePathHint(error, targetPath) {
+  if (!error || typeof error !== 'object') {
+    return error;
+  }
+
+  const code = 'code' in error ? error.code : '';
+  if (code !== 'EACCES' && code !== 'EPERM') {
+    return error;
+  }
+
+  const wrapped = new Error(
+    `Unable to write to ${targetPath}. Check the Docker bind mount permissions. `
+      + 'For NAS or Unraid deployments, set PUID and PGID to a user that can write to the mapped data directory '
+      + '(Unraid commonly uses 99:100 for nobody:users).',
+  );
+
+  wrapped.code = code;
+  wrapped.cause = error;
+  return wrapped;
+}
+
 function normalizeNoteText(input) {
   return String(input || '')
     .replace(/\s+/g, ' ')
@@ -650,7 +671,11 @@ async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs) {
     : `${baseName}_${String(item.index).padStart(2, '0')}.${extension}`;
   const absolutePath = path.join(outputDir, fileName);
 
-  await pipeline(Readable.fromWeb(response.body), createWriteStream(absolutePath));
+  try {
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(absolutePath));
+  } catch (error) {
+    throw withWritablePathHint(error, absolutePath);
+  }
 
   return {
     ...item,
@@ -701,7 +726,11 @@ export async function downloadMedia(media, noteTitle, noteId, downloadDir, optio
   const safeDirName = sanitizeFileName(`${fileStem}_${noteId || 'unknown'}`);
   const outputDir = path.join(downloadDir, safeDirName);
 
-  await mkdir(outputDir, { recursive: true });
+  try {
+    await mkdir(outputDir, { recursive: true });
+  } catch (error) {
+    throw withWritablePathHint(error, outputDir);
+  }
 
   const baseName = fileStem;
   const results = [];
