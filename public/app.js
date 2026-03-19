@@ -1,12 +1,5 @@
 import { COOKIE_STORAGE_KEY, parseCookieText } from './cookie-utils.js';
 
-const ADMIN_TOKEN_STORAGE_KEY = 'rednote-downloader.adminToken';
-
-const adminTokenInput = document.querySelector('#admin-token');
-const adminTokenStatus = document.querySelector('#admin-token-status');
-const saveAdminTokenButton = document.querySelector('#save-admin-token-button');
-const clearAdminTokenButton = document.querySelector('#clear-admin-token-button');
-
 const form = document.querySelector('#resolve-form');
 const input = document.querySelector('#input');
 const serverDownload = document.querySelector('#server-download');
@@ -63,7 +56,6 @@ const copyButtons = Array.from(document.querySelectorAll('[data-copy-target]'));
 
 let latestMedia = [];
 let latestTitle = 'rednote-media';
-let adminToken = '';
 
 function setMessage(element, message, tone = '') {
   element.textContent = message;
@@ -85,19 +77,13 @@ function switchTab(tabId) {
 
 async function fetchJson(url, options) {
   const requestOptions = options ? { ...options } : {};
-  const headers = new Headers(requestOptions.headers || {});
-
-  if (adminToken && !headers.has('X-Admin-Token')) {
-    headers.set('X-Admin-Token', adminToken);
-  }
-
-  requestOptions.headers = headers;
+  requestOptions.headers = new Headers(requestOptions.headers || {});
 
   const response = await fetch(url, requestOptions);
   const data = await response.json().catch(() => null);
 
   if (response.status === 401) {
-    throw new Error('缺少或错误的 Admin Token，请先在页面顶部填写。');
+    throw new Error('当前实例启用了管理令牌，页面内不再提供录入入口。请通过 API Header 访问，或关闭 REDNOTE_ADMIN_TOKEN。');
   }
 
   if (!response.ok || !data?.ok) {
@@ -121,10 +107,6 @@ function setTelegramStatus(message, tone = '') {
 
 function setOpenClawStatus(message, tone = '') {
   setMessage(openclawStatus, message, tone);
-}
-
-function setAdminTokenStatus(message, tone = '') {
-  setMessage(adminTokenStatus, message, tone);
 }
 
 function countConfiguredChatIds(value) {
@@ -183,6 +165,12 @@ function buildProxyUrl(item, index, inline) {
     filename: fileNameForItem(item, index),
   });
 
+  if (Array.isArray(item.fallbackUrls)) {
+    item.fallbackUrls
+      .filter(Boolean)
+      .forEach((fallbackUrl) => params.append('fallback', fallbackUrl));
+  }
+
   if (inline) {
     params.set('inline', '1');
   }
@@ -223,6 +211,108 @@ function createMediaActionLink(label, href, options = {}) {
   return link;
 }
 
+function createMediaActionButton(label, onClick, options = {}) {
+  const { primary = false } = options;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `button media-action-button${primary ? ' button-primary' : ''}`;
+  button.textContent = label;
+  button.addEventListener('click', () => {
+    void onClick(button);
+  });
+  return button;
+}
+
+function extractFileNameFromDisposition(headerValue, fallback) {
+  if (!headerValue) {
+    return fallback;
+  }
+
+  const utf8Match = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return fallback;
+    }
+  }
+
+  const quotedMatch = headerValue.match(/filename="([^"]+)"/i);
+  if (quotedMatch?.[1]) {
+    return quotedMatch[1];
+  }
+
+  const plainMatch = headerValue.match(/filename=([^;]+)/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1].trim();
+  }
+
+  return fallback;
+}
+
+async function readProxyDownloadError(response) {
+  const contentType = response.headers.get('content-type') || '';
+
+  if (contentType.includes('application/json')) {
+    const payload = await response.json().catch(() => null);
+    return payload?.error || `代理下载失败 (${response.status})`;
+  }
+
+  const text = await response.text().catch(() => '');
+  return text.trim() || `代理下载失败 (${response.status})`;
+}
+
+function triggerBlobDownload(blob, fileName) {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+async function downloadProxyMedia(item, index, options = {}) {
+  const {
+    button = null,
+    silentSuccess = false,
+  } = options;
+  const fallbackFileName = fileNameForItem(item, index);
+  const idleLabel = button?.dataset.idleLabel || button?.textContent || '代理下载';
+
+  if (button) {
+    button.dataset.idleLabel = idleLabel;
+    button.disabled = true;
+    button.textContent = '下载中...';
+  }
+
+  try {
+    const response = await fetch(buildProxyUrl(item, index, false));
+    if (!response.ok) {
+      throw new Error(await readProxyDownloadError(response));
+    }
+
+    const fileName = extractFileNameFromDisposition(
+      response.headers.get('content-disposition'),
+      fallbackFileName,
+    );
+    const blob = await response.blob();
+    triggerBlobDownload(blob, fileName);
+
+    if (!silentSuccess) {
+      setStatus(`已开始下载 ${fileName}。`);
+    }
+
+    return fileName;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = idleLabel;
+    }
+  }
+}
+
 function loadSavedCookie() {
   const saved = window.localStorage.getItem(COOKIE_STORAGE_KEY);
   if (!saved) {
@@ -232,12 +322,6 @@ function loadSavedCookie() {
 
   cookieInput.value = saved;
   setCookieStatus('已从本地浏览器恢复保存的 Cookie。');
-}
-
-function loadSavedAdminToken() {
-  adminToken = window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || '';
-  adminTokenInput.value = adminToken;
-  setAdminTokenStatus(adminToken ? '已从本地浏览器恢复 Admin Token。' : '当前没有保存 Admin Token。');
 }
 
 function saveCookieLocally() {
@@ -256,38 +340,6 @@ function clearCookieLocally() {
   cookieInput.value = '';
   window.localStorage.removeItem(COOKIE_STORAGE_KEY);
   setCookieStatus('Cookie 已清空。');
-}
-
-async function saveAdminTokenLocally() {
-  adminToken = adminTokenInput.value.trim();
-  if (!adminToken) {
-    window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-    setAdminTokenStatus('输入为空，已移除本地保存的 Admin Token。');
-    return;
-  }
-
-  window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, adminToken);
-  setAdminTokenStatus('Admin Token 已保存，正在验证...', '');
-
-  try {
-    await loadDashboard();
-    setAdminTokenStatus('Admin Token 已保存并验证通过。', 'success');
-  } catch (error) {
-    setAdminTokenStatus(error instanceof Error ? error.message : 'Admin Token 验证失败', 'error');
-  }
-}
-
-async function clearAdminTokenLocally() {
-  adminToken = '';
-  adminTokenInput.value = '';
-  window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-  setAdminTokenStatus('Admin Token 已清空。');
-
-  try {
-    await loadDashboard();
-  } catch {
-    // Clearing the token may intentionally remove access to admin-only endpoints.
-  }
 }
 
 async function importCookieFile(file) {
@@ -353,9 +405,14 @@ function renderMedia(items) {
     const actions = document.createElement('div');
     actions.className = 'media-actions';
     actions.append(
-      createMediaActionLink('代理下载', buildProxyUrl(item, index, false), {
+      createMediaActionButton('代理下载', async (button) => {
+        try {
+          await downloadProxyMedia(item, index, { button });
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : '代理下载失败', true);
+        }
+      }, {
         primary: true,
-        download: true,
       }),
       createMediaActionLink('打开原始地址', item.url, {
         target: '_blank',
@@ -511,12 +568,31 @@ async function onSubmit(event) {
   }
 }
 
-function triggerBrowserDownloads() {
-  latestMedia.forEach((item, index) => {
-    const link = document.createElement('a');
-    link.href = buildProxyUrl(item, index, false);
-    link.click();
-  });
+async function triggerBrowserDownloads() {
+  if (!latestMedia.length) {
+    return;
+  }
+
+  downloadAllButton.disabled = true;
+  const failures = [];
+  let successCount = 0;
+
+  for (const [index, item] of latestMedia.entries()) {
+    try {
+      await downloadProxyMedia(item, index, { silentSuccess: true });
+      successCount += 1;
+    } catch (error) {
+      failures.push(`${index + 1}. ${error instanceof Error ? error.message : '代理下载失败'}`);
+    }
+  }
+
+  if (failures.length) {
+    setStatus(`已开始下载 ${successCount} 个文件，失败 ${failures.length} 个：${failures[0]}`, true);
+  } else {
+    setStatus(`已开始下载 ${successCount} 个文件。`);
+  }
+
+  downloadAllButton.disabled = latestMedia.length === 0;
 }
 
 function onCookieFileChange(event) {
@@ -720,8 +796,6 @@ form.addEventListener('submit', onSubmit);
 downloadAllButton.addEventListener('click', triggerBrowserDownloads);
 saveCookieButton.addEventListener('click', saveCookieLocally);
 clearCookieButton.addEventListener('click', clearCookieLocally);
-saveAdminTokenButton.addEventListener('click', saveAdminTokenLocally);
-clearAdminTokenButton.addEventListener('click', clearAdminTokenLocally);
 cookieFileInput.addEventListener('change', onCookieFileChange);
 cookieDropzone.addEventListener('click', openCookiePicker);
 cookieDropzone.addEventListener('keydown', (event) => {
@@ -745,10 +819,8 @@ copyButtons.forEach((button) => {
   button.addEventListener('click', copyTextFromTarget);
 });
 
-loadSavedAdminToken();
 loadSavedCookie();
 loadDashboard().catch((error) => {
-  setAdminTokenStatus(error instanceof Error ? error.message : '初始化配置失败', 'error');
   setTelegramStatus(error instanceof Error ? error.message : '初始化配置失败', 'error');
   setOpenClawStatus(error instanceof Error ? error.message : '初始化配置失败', 'error');
 });

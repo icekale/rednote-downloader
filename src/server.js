@@ -329,6 +329,7 @@ async function handleStatic(response, pathname) {
 
 async function handleMediaProxy(request, response, url) {
   const target = url.searchParams.get('url');
+  const fallbackTargets = url.searchParams.getAll('fallback').filter(Boolean);
   const inline = url.searchParams.get('inline') === '1';
   const requestedName = url.searchParams.get('filename');
 
@@ -341,9 +342,25 @@ async function handleMediaProxy(request, response, url) {
   }
 
   const rangeHeader = request.headers.range ? { Range: request.headers.range } : undefined;
-  const proxied = await fetchMediaResponse(target, {
-    headers: rangeHeader,
-  });
+  const candidates = [...new Set([target, ...fallbackTargets])];
+  const errors = [];
+  let proxied = null;
+
+  for (const candidate of candidates) {
+    try {
+      proxied = await fetchMediaResponse(candidate, {
+        headers: rangeHeader,
+      });
+      break;
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (!proxied) {
+    throw new Error(errors[0] || 'Failed to proxy media');
+  }
+
   const fileName = requestedName || inferFileNameFromUrl(proxied.url.toString());
   const headers = {
     'Access-Control-Allow-Origin': '*',

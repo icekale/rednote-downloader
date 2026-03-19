@@ -42,28 +42,6 @@
     </header>
 
     <main class="shell">
-      <section class="card section-card">
-        <div class="section-head compact">
-          <div>
-            <p class="section-kicker">Security</p>
-            <h2>管理访问</h2>
-          </div>
-          <p class="section-note">只有配置了 `REDNOTE_ADMIN_TOKEN` 时才需要填写。Token 只保存在当前浏览器。</p>
-        </div>
-
-        <div class="stack">
-          <label class="field">
-            <span>Admin Token</span>
-            <input id="admin-token" type="password" placeholder="可选，远程管理时建议开启">
-          </label>
-          <div class="button-row">
-            <button id="save-admin-token-button" type="button" class="button">保存到当前浏览器</button>
-            <button id="clear-admin-token-button" type="button" class="button">清空 Token</button>
-          </div>
-          <p id="admin-token-status" class="status" aria-live="polite"></p>
-        </div>
-      </section>
-
       <nav class="tabs card" aria-label="主功能标签">
         <button class="tab-button active" type="button" data-tab="resolve">解析下载</button>
         <button class="tab-button" type="button" data-tab="telegram">Telegram</button>
