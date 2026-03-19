@@ -1,6 +1,6 @@
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.10
+    image: icekale/rednote-downloader:v0.2.11
     container_name: rednote-downloader
     user: "${PUID:-1000}:${PGID:-1000}"
     ports:
