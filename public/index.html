@@ -12,43 +12,16 @@
         <div class="brand">
           <strong>RedNote Downloader</strong>
         </div>
-        <div class="header-strip" aria-label="工作台概览">
-          <span class="header-chip">
-            <b>sources</b>
-            <em>2</em>
-          </span>
-          <span class="header-chip">
-            <b>pipelines</b>
-            <em>3</em>
-          </span>
-          <span class="header-chip">
-            <b>mode</b>
-            <em id="header-telegram-mode">document</em>
-          </span>
-          <span class="header-chip">
-            <b>chats</b>
-            <em id="header-telegram-allowlist">0</em>
-          </span>
-          <span class="header-chip">
-            <b>service</b>
-            <em>online</em>
-          </span>
-          <span class="header-chip">
-            <b>telegram</b>
-            <em id="telegram-runtime-pill">checking</em>
-          </span>
-        </div>
+        <nav class="tabs topbar-tabs" aria-label="主功能标签">
+          <button class="tab-button active" type="button" data-tab="resolve">解析下载</button>
+          <button class="tab-button" type="button" data-tab="telegram">Telegram</button>
+          <button class="tab-button" type="button" data-tab="openclaw">OpenClaw</button>
+          <button class="tab-button" type="button" data-tab="diagnostics">诊断</button>
+        </nav>
       </div>
     </header>
 
     <main class="shell">
-      <nav class="tabs card" aria-label="主功能标签">
-        <button class="tab-button active" type="button" data-tab="resolve">解析下载</button>
-        <button class="tab-button" type="button" data-tab="telegram">Telegram</button>
-        <button class="tab-button" type="button" data-tab="openclaw">OpenClaw</button>
-        <button class="tab-button" type="button" data-tab="diagnostics">诊断</button>
-      </nav>
-
       <section id="tab-resolve" class="tab-panel active">
         <section class="card section-card">
           <div class="section-head">

@@ -107,10 +107,10 @@ select {
 .topbar-inner {
   position: relative;
   display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  align-items: center;
-  padding: 10px 16px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
   border: 1px solid rgba(255, 255, 255, 0.76);
   border-radius: 18px;
   background:
@@ -175,44 +175,6 @@ select {
   white-space: nowrap;
 }
 
-.header-strip {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.header-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid rgba(10, 37, 64, 0.08);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.76);
-  color: var(--text);
-  box-shadow: 0 6px 18px rgba(10, 37, 64, 0.04);
-}
-
-.header-chip b {
-  color: rgba(10, 37, 64, 0.52);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.header-chip em {
-  color: var(--text);
-  font-size: 14px;
-  font-style: normal;
-  font-weight: 650;
-  line-height: 1.2;
-}
-
 .shell {
   padding: 0 0 32px;
 }
@@ -256,6 +218,17 @@ select {
   padding: 4px;
   overflow-x: auto;
   position: relative;
+}
+
+.topbar-tabs {
+  margin: 0;
+  padding: 4px;
+  width: 100%;
+  overflow-x: auto;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 
 .tab-button {
@@ -901,13 +874,12 @@ select:focus {
 
 @media (max-width: 920px) {
   .topbar-inner {
-    padding: 16px;
-    flex-direction: column;
-    align-items: flex-start;
+    padding: 12px;
   }
 
-  .header-strip {
-    justify-content: flex-start;
+  .topbar-tabs {
+    width: 100%;
+    overflow-x: auto;
   }
 
   .section-grid,
@@ -960,6 +932,10 @@ select:focus {
 
   .tabs {
     margin-top: 0;
+  }
+
+  .topbar-tabs {
+    width: 100%;
   }
 
   .section-card,
