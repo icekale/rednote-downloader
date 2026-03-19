@@ -131,6 +131,14 @@ select {
   gap: 16px;
 }
 
+.brand-icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 9px;
+  box-shadow: 0 8px 18px rgba(99, 91, 255, 0.2);
+}
+
 .topbar-inner::before,
 .topbar-inner::after {
   content: "";
@@ -160,9 +168,9 @@ select {
 .brand {
   position: relative;
   z-index: 1;
-  display: flex;
-  align-items: baseline;
-  gap: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
   min-width: 0;
 }
 

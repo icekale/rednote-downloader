@@ -49,6 +49,7 @@ const STATIC_ROUTES = new Map([
   ['/', 'index.html'],
   ['/app.js', 'app.js'],
   ['/cookie-utils.js', 'cookie-utils.js'],
+  ['/icon.svg', 'icon.svg'],
   ['/styles.css', 'styles.css'],
 ]);
 
@@ -112,6 +113,7 @@ function contentTypeFromFileName(fileName) {
   if (fileName.endsWith('.html')) return 'text/html; charset=utf-8';
   if (fileName.endsWith('.css')) return 'text/css; charset=utf-8';
   if (fileName.endsWith('.js')) return 'text/javascript; charset=utf-8';
+  if (fileName.endsWith('.svg')) return 'image/svg+xml';
   return 'application/octet-stream';
 }
 
