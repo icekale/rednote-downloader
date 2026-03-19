@@ -32,8 +32,10 @@ docker run -d \
   --restart unless-stopped \
   -p 3000:3000 \
   -v "$(pwd)/data:/data/downloads" \
-  icekale/rednote-downloader:latest
+  icekale/rednote-downloader:v0.2.4
 ```
+
+If you prefer a floating tag, replace `v0.2.4` with `latest`.
 
 Then open:
 
@@ -46,7 +48,7 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:latest
+    image: icekale/rednote-downloader:v0.2.4
     container_name: rednote-downloader
     ports:
       - "3000:3000"
@@ -57,9 +59,13 @@ services:
       XHS_COOKIE: ${XHS_COOKIE:-}
       XHS_USER_AGENT: ${XHS_USER_AGENT:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-15000}
+      MEDIA_REQUEST_TIMEOUT_MS: ${MEDIA_REQUEST_TIMEOUT_MS:-30000}
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
       TELEGRAM_DELIVERY_MODE: ${TELEGRAM_DELIVERY_MODE:-document}
+      REDNOTE_ADMIN_TOKEN: ${REDNOTE_ADMIN_TOKEN:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     volumes:
       - ./data:/data/downloads
     restart: unless-stopped
@@ -73,9 +79,13 @@ services:
 - `XHS_COOKIE`: optional manual cookie header for protected RedNote posts
 - `XHS_USER_AGENT`: optional custom request user agent
 - `REQUEST_TIMEOUT_MS`: optional request timeout in milliseconds, default `15000`
+- `MEDIA_REQUEST_TIMEOUT_MS`: optional timeout for receiving media response headers, default `30000`
+- `TELEGRAM_ENABLED`: optional; set to `false` / `0` to disable the Telegram polling bot
 - `TELEGRAM_BOT_TOKEN`: optional Telegram bot token
 - `TELEGRAM_ALLOWED_CHAT_IDS`: optional allowlist of chat ids
 - `TELEGRAM_DELIVERY_MODE`: `document` or `preview`
+- `REDNOTE_ADMIN_TOKEN`: optional admin token required by protected management endpoints
+- `CORS_ALLOWED_ORIGINS`: optional comma-separated list of extra allowed cross-origin management UIs
 
 ## Notes
 
@@ -84,6 +94,7 @@ services:
 - If the target page returns an anti-bot page or does not expose usable media URLs, the service returns an error
 - X / Twitter metadata is resolved through public metadata APIs and then downloaded from the original media hosts
 - The OpenClaw tool output includes Telegram-ready text plus direct media URLs
+- A Telegram bot token can only be long-polled by one running instance at a time; use `TELEGRAM_ENABLED=false` for temporary sidecar checks
 
 ## Best Fit
 

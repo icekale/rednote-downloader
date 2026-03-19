@@ -32,8 +32,10 @@ docker run -d \
   --restart unless-stopped \
   -p 3000:3000 \
   -v "$(pwd)/data:/data/downloads" \
-  icekale/rednote-downloader:latest
+  icekale/rednote-downloader:v0.2.4
 ```
+
+如果你希望始终跟随最新镜像，也可以把 tag 换成 `latest`。
 
 启动后打开：
 
@@ -46,7 +48,7 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:latest
+    image: icekale/rednote-downloader:v0.2.4
     container_name: rednote-downloader
     ports:
       - "3000:3000"
@@ -57,9 +59,13 @@ services:
       XHS_COOKIE: ${XHS_COOKIE:-}
       XHS_USER_AGENT: ${XHS_USER_AGENT:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-15000}
+      MEDIA_REQUEST_TIMEOUT_MS: ${MEDIA_REQUEST_TIMEOUT_MS:-30000}
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
       TELEGRAM_DELIVERY_MODE: ${TELEGRAM_DELIVERY_MODE:-document}
+      REDNOTE_ADMIN_TOKEN: ${REDNOTE_ADMIN_TOKEN:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     volumes:
       - ./data:/data/downloads
     restart: unless-stopped
@@ -73,9 +79,13 @@ services:
 - `XHS_COOKIE`: 可选，给受限小红书帖子补 Cookie
 - `XHS_USER_AGENT`: 可选，自定义请求 UA
 - `REQUEST_TIMEOUT_MS`: 可选，请求超时，默认 `15000`
+- `MEDIA_REQUEST_TIMEOUT_MS`: 可选，媒体请求首包超时，默认 `30000`
+- `TELEGRAM_ENABLED`: 可选，设为 `false` / `0` 时禁用 Telegram 轮询器
 - `TELEGRAM_BOT_TOKEN`: 可选，Telegram bot token
 - `TELEGRAM_ALLOWED_CHAT_IDS`: 可选，允许使用的 chat id 列表
 - `TELEGRAM_DELIVERY_MODE`: `document` 或 `preview`
+- `REDNOTE_ADMIN_TOKEN`: 可选，设置后管理接口需要带 `X-Admin-Token`
+- `CORS_ALLOWED_ORIGINS`: 可选，额外允许跨域访问管理接口的 Origin 列表
 
 ## 注意事项
 
@@ -84,6 +94,7 @@ services:
 - 如果目标页面返回风控页、验证码页，或根本没有暴露可用媒体地址，服务会直接报错
 - X / Twitter 通过公开元数据接口解析，再从原始媒体域名下载
 - OpenClaw 工具返回的是适合 Telegram 使用的说明文本和直链媒体地址
+- 同一个 Telegram bot token 同时只能有一个长轮询实例；如果只是临时起副本做检查，建议设置 `TELEGRAM_ENABLED=false`
 
 ## 适合谁
 
