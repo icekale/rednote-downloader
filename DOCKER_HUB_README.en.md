@@ -34,10 +34,10 @@ docker run -d \
   --user "$(id -u):$(id -g)" \
   -p 3000:3000 \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.9
+  icekale/rednote-downloader:v0.2.10
 ```
 
-If you prefer a floating tag, replace `v0.2.9` with `latest`.
+If you prefer a floating tag, replace `v0.2.10` with `latest`.
 
 Then open:
 
@@ -50,7 +50,7 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.9
+    image: icekale/rednote-downloader:v0.2.10
     container_name: rednote-downloader
     ports:
       - "3000:3000"

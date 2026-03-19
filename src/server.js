@@ -3,6 +3,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { access, mkdir, readFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
+import packageMeta from '../package.json' with { type: 'json' };
 import { downloadMedia, fetchMediaResponse, resolveNote, sanitizeFileName } from './xhs.js';
 import { TelegramBotRunner, parseAllowedChatIds } from './telegram.js';
 import {
@@ -24,6 +25,7 @@ import { buildOpenClawResolvePayload, buildOpenClawTemplate } from './openclaw.j
 
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '127.0.0.1';
+const APP_VERSION = packageMeta.version;
 const DOWNLOAD_DIR = path.resolve(process.env.DOWNLOAD_DIR || path.join(process.cwd(), 'data'));
 const APP_CONFIG_PATH = getAppConfigPath(process.env, DOWNLOAD_DIR);
 const APP_STATE_PATH = getAppStatePath(process.env, DOWNLOAD_DIR, APP_CONFIG_PATH);
@@ -621,6 +623,7 @@ const server = http.createServer(async (request, response) => {
       sendJson(request, response, 200, {
         ok: true,
         service: 'rednote-downloader',
+        version: APP_VERSION,
         adminTokenRequired: Boolean(ADMIN_TOKEN),
       });
       return;
@@ -689,6 +692,7 @@ await applyTelegramRuntime();
 
 server.listen(PORT, HOST, () => {
   console.log(`rednote-downloader listening on http://${HOST}:${PORT}`);
+  console.log(`version: ${APP_VERSION}`);
   console.log(`download dir: ${DOWNLOAD_DIR}`);
   console.log(`config file: ${APP_CONFIG_PATH}`);
   console.log(`state file: ${APP_STATE_PATH}`);

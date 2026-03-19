@@ -46,6 +46,7 @@ const diagnosticsCardsEl = document.querySelector('#diagnostics-cards');
 const diagnosticsChecksEl = document.querySelector('#diagnostics-checks');
 const diagnosticsHintsEl = document.querySelector('#diagnostics-hints');
 const diagnosticsJsonEl = document.querySelector('#diagnostics-json');
+const footerVersionEl = document.querySelector('#footer-version');
 
 const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
 const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
@@ -687,6 +688,21 @@ async function loadDashboard() {
   ]);
 }
 
+async function loadFooterMeta() {
+  if (!footerVersionEl) {
+    return;
+  }
+
+  try {
+    const data = await fetchJson('/healthz');
+    if (data.version) {
+      footerVersionEl.textContent = `v${data.version}`;
+    }
+  } catch {
+    footerVersionEl.textContent = footerVersionEl.textContent || 'v0.2.10';
+  }
+}
+
 async function saveTelegramConfig() {
   setTelegramStatus('正在保存 Telegram 配置...');
   saveTelegramConfigButton.disabled = true;
@@ -828,6 +844,7 @@ copyButtons.forEach((button) => {
 });
 
 loadSavedCookie();
+void loadFooterMeta();
 loadDashboard().catch((error) => {
   setTelegramStatus(error instanceof Error ? error.message : '初始化配置失败', 'error');
   setOpenClawStatus(error instanceof Error ? error.message : '初始化配置失败', 'error');
