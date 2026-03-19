@@ -144,9 +144,10 @@ docker build -t rednote-downloader .
 docker run -d \
   --name rednote-downloader \
   --restart unless-stopped \
+  --user "$(id -u):$(id -g)" \
   -p 3000:3000 \
   -e XHS_COOKIE='你的 cookie，可选' \
-  -v "$(pwd)/data:/data/downloads" \
+  -v "$(pwd)/data:/data" \
   rednote-downloader
 ```
 
@@ -162,7 +163,20 @@ docker compose up --build
 docker compose -f compose.hub.yaml up -d
 ```
 
-`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.7`。
+`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.8`。
+
+Docker 默认会把容器内目录拆成：
+
+```text
+/data/downloads
+/data/config
+```
+
+如果你在 NAS 或 Portainer 上部署，建议把 `REDNOTE_DATA_DIR` 设成绝对路径，例如：
+
+```bash
+REDNOTE_DATA_DIR=/volume1/docker/rednote docker compose -f compose.hub.yaml up -d
+```
 
 ## Telegram Bot Mode
 
@@ -198,20 +212,33 @@ npm start
 如果你更喜欢在网页里配置 Telegram，可以直接把 Token / chat id 保存到控制台页面。配置文件默认保存在：
 
 ```text
-<DOWNLOAD_DIR>/.rednote-config.json
+<APP_CONFIG_PATH>
 ```
 
-例如 Docker 默认下载目录是 `/data/downloads`，那么配置文件就是：
+例如 Docker 默认配置文件路径是：
 
 ```text
-/data/downloads/.rednote-config.json
+/data/config/.rednote-config.json
 ```
 
-Telegram 轮询状态默认会单独保存在同目录的：
+Telegram 轮询状态默认会单独保存在：
 
 ```text
-<DOWNLOAD_DIR>/.rednote-state.json
+<APP_STATE_PATH>
 ```
+
+默认值是：
+
+```text
+/data/config/.rednote-state.json
+```
+
+从旧版本升级时，如果你之前把配置保存在下载目录根部，服务启动时会自动把：
+
+- `/data/.rednote-config.json`
+- `/data/.rednote-state.json`
+
+复制到新的 `/data/config/` 目录里。
 
 如果你计划把管理页暴露到非本机环境，建议同时配置：
 
@@ -250,7 +277,7 @@ src/mcp-server.js
 
 - 文件位置：`.github/workflows/docker-publish.yml`
 - `push` 到 `main` 时自动推送 `latest`
-- 推送形如 `v0.2.7` 的 tag 时自动推送对应版本标签
+- 推送形如 `v0.2.8` 的 tag 时自动推送对应版本标签
 - 同时构建 `linux/amd64` 和 `linux/arm64`
 
 在 GitHub 仓库里补两个 Actions secrets 即可启用：
@@ -265,6 +292,10 @@ src/mcp-server.js
 - `PORT`: 服务端口，默认 `3000`
 - `HOST`: 监听地址，本机默认 `127.0.0.1`，Docker 默认 `0.0.0.0`
 - `DOWNLOAD_DIR`: 下载目录，默认 `/data/downloads`（Docker 内）
+- `APP_CONFIG_PATH`: 可选。图形化配置保存路径，Docker 默认 `/data/config/.rednote-config.json`
+- `APP_STATE_PATH`: 可选。Telegram 轮询状态保存路径，Docker 默认 `/data/config/.rednote-state.json`
+- `REDNOTE_DATA_DIR`: 仅 compose 示例使用。宿主机映射到容器 `/data` 的根目录；NAS 建议使用绝对路径
+- `PUID` / `PGID`: 仅 compose 示例使用。控制容器以哪个宿主机 uid/gid 写入挂载目录，默认 `1000:1000`
 - `XHS_COOKIE`: 可选。公开页面被风控时可以尝试带上浏览器 Cookie
 - `XHS_USER_AGENT`: 可选。覆盖默认浏览器 UA
 - `REQUEST_TIMEOUT_MS`: 可选。请求超时，默认 `15000`
@@ -273,8 +304,6 @@ src/mcp-server.js
 - `TELEGRAM_BOT_TOKEN`: 可选。启用 Telegram bot 模式
 - `TELEGRAM_ALLOWED_CHAT_IDS`: 可选。允许的 Telegram chat id，逗号分隔
 - `TELEGRAM_DELIVERY_MODE`: 可选。`document` 或 `preview`，默认 `document`
-- `APP_CONFIG_PATH`: 可选。图形化配置保存路径，默认 `<DOWNLOAD_DIR>/.rednote-config.json`
-- `APP_STATE_PATH`: 可选。Telegram 轮询状态保存路径，默认与配置文件同目录的 `.rednote-state.json`
 - `REDNOTE_ADMIN_TOKEN`: 可选。设置后，管理接口需要携带 `X-Admin-Token`
 - `CORS_ALLOWED_ORIGINS`: 可选。额外允许跨域调用的 Origin，逗号分隔；默认只允许同源页面
 

@@ -22,7 +22,8 @@ This image is built for people who want a small local tool instead of a scraping
 - A polished local control panel with tabs for Resolve, Telegram, OpenClaw, and Diagnostics
 - Media resolution APIs for browser and agent workflows
 - An optional Telegram polling bot when a bot token is configured
-- Download storage under `/data/downloads` by default
+- Download storage under `/data/downloads`
+- App config and Telegram polling state under `/data/config`
 
 ## Quick Start
 
@@ -30,12 +31,13 @@ This image is built for people who want a small local tool instead of a scraping
 docker run -d \
   --name rednote-downloader \
   --restart unless-stopped \
+  --user "$(id -u):$(id -g)" \
   -p 3000:3000 \
-  -v "$(pwd)/data:/data/downloads" \
-  icekale/rednote-downloader:v0.2.7
+  -v "$(pwd)/data:/data" \
+  icekale/rednote-downloader:v0.2.8
 ```
 
-If you prefer a floating tag, replace `v0.2.7` with `latest`.
+If you prefer a floating tag, replace `v0.2.8` with `latest`.
 
 Then open:
 
@@ -48,7 +50,7 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.7
+    image: icekale/rednote-downloader:v0.2.8
     container_name: rednote-downloader
     ports:
       - "3000:3000"
@@ -56,6 +58,8 @@ services:
       HOST: 0.0.0.0
       PORT: "3000"
       DOWNLOAD_DIR: /data/downloads
+      APP_CONFIG_PATH: /data/config/.rednote-config.json
+      APP_STATE_PATH: /data/config/.rednote-state.json
       XHS_COOKIE: ${XHS_COOKIE:-}
       XHS_USER_AGENT: ${XHS_USER_AGENT:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-15000}
@@ -66,8 +70,9 @@ services:
       TELEGRAM_DELIVERY_MODE: ${TELEGRAM_DELIVERY_MODE:-document}
       REDNOTE_ADMIN_TOKEN: ${REDNOTE_ADMIN_TOKEN:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+    user: "${PUID:-1000}:${PGID:-1000}"
     volumes:
-      - ./data:/data/downloads
+      - ${REDNOTE_DATA_DIR:-./data}:/data
     restart: unless-stopped
 ```
 
@@ -76,6 +81,10 @@ services:
 - `HOST`: bind address, default `0.0.0.0`
 - `PORT`: service port, default `3000`
 - `DOWNLOAD_DIR`: download directory, default `/data/downloads`
+- `APP_CONFIG_PATH`: app config path, default `/data/config/.rednote-config.json`
+- `APP_STATE_PATH`: polling state path, default `/data/config/.rednote-state.json`
+- `REDNOTE_DATA_DIR`: compose-only host path mounted to `/data`; use an absolute path on NAS
+- `PUID` / `PGID`: compose-only uid/gid override for bind-mounted directories
 - `XHS_COOKIE`: optional manual cookie header for protected RedNote posts
 - `XHS_USER_AGENT`: optional custom request user agent
 - `REQUEST_TIMEOUT_MS`: optional request timeout in milliseconds, default `15000`
@@ -95,6 +104,7 @@ services:
 - X / Twitter metadata is resolved through public metadata APIs and then downloaded from the original media hosts
 - The OpenClaw tool output includes Telegram-ready text plus direct media URLs
 - A Telegram bot token can only be long-polled by one running instance at a time; use `TELEGRAM_ENABLED=false` for temporary sidecar checks
+- Legacy config files stored directly under `/data` are copied into `/data/config` on first boot after upgrade
 
 ## Best Fit
 

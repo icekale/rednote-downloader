@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 
 const DEFAULT_OPENCLAW_SERVICE_BASE_URL = 'http://127.0.0.1:3000';
 const DEFAULT_MCP_SERVER_NAME = 'rednote';
@@ -156,6 +156,69 @@ export function getAppStatePath(env = process.env, downloadDir, configPath = '')
   }
 
   return path.resolve(path.join(downloadDir, '.rednote-state.json'));
+}
+
+async function fileExists(targetPath) {
+  try {
+    await access(targetPath);
+    return true;
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+async function migrateLegacyFile(legacyPaths, nextPath) {
+  const target = path.resolve(nextPath);
+
+  if (await fileExists(target)) {
+    return false;
+  }
+
+  const candidates = Array.isArray(legacyPaths) ? legacyPaths : [legacyPaths];
+  const source = await (async () => {
+    for (const candidate of candidates) {
+      const resolved = path.resolve(candidate);
+      if (resolved === target) {
+        continue;
+      }
+
+      if (await fileExists(resolved)) {
+        return resolved;
+      }
+    }
+
+    return '';
+  })();
+
+  if (!source) {
+    return false;
+  }
+
+  await mkdir(path.dirname(target), { recursive: true });
+  await copyFile(source, target);
+  return true;
+}
+
+export async function migrateLegacyAppFiles({ downloadDir, configPath, statePath }) {
+  const legacyDirCandidates = [
+    path.resolve(downloadDir),
+    path.resolve(path.dirname(downloadDir)),
+  ];
+
+  return {
+    config: await migrateLegacyFile(
+      legacyDirCandidates.map((dir) => path.join(dir, '.rednote-config.json')),
+      configPath,
+    ),
+    state: await migrateLegacyFile(
+      legacyDirCandidates.map((dir) => path.join(dir, '.rednote-state.json')),
+      statePath,
+    ),
+  };
 }
 
 export async function loadAppConfig(configPath) {

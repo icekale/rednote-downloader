@@ -1,13 +1,16 @@
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.7
+    image: icekale/rednote-downloader:v0.2.8
     container_name: rednote-downloader
+    user: "${PUID:-1000}:${PGID:-1000}"
     ports:
       - "3000:3000"
     environment:
       HOST: 0.0.0.0
       PORT: "3000"
       DOWNLOAD_DIR: /data/downloads
+      APP_CONFIG_PATH: /data/config/.rednote-config.json
+      APP_STATE_PATH: /data/config/.rednote-state.json
       XHS_COOKIE: ${XHS_COOKIE:-}
       XHS_USER_AGENT: ${XHS_USER_AGENT:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-15000}
@@ -19,5 +22,5 @@ services:
       REDNOTE_ADMIN_TOKEN: ${REDNOTE_ADMIN_TOKEN:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     volumes:
-      - ./data:/data/downloads
+      - ${REDNOTE_DATA_DIR:-./data}:/data
     restart: unless-stopped

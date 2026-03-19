@@ -12,6 +12,7 @@ import {
   loadAppState,
   loadAppConfig,
   mergeAppConfig,
+  migrateLegacyAppFiles,
   normalizeDeliveryMode,
   normalizeEnvBoolean,
   normalizeServiceBaseUrl,
@@ -224,6 +225,12 @@ function buildTelegramRuntimeConfig(config) {
     deliveryMode,
   };
 }
+
+const legacyMigration = await migrateLegacyAppFiles({
+  downloadDir: DOWNLOAD_DIR,
+  configPath: APP_CONFIG_PATH,
+  statePath: APP_STATE_PATH,
+});
 
 let appConfig = await loadAppConfig(APP_CONFIG_PATH);
 let appState = await loadAppState(APP_STATE_PATH);
@@ -669,7 +676,13 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-await mkdir(DOWNLOAD_DIR, { recursive: true });
+for (const targetDir of new Set([
+  DOWNLOAD_DIR,
+  path.dirname(APP_CONFIG_PATH),
+  path.dirname(APP_STATE_PATH),
+])) {
+  await mkdir(targetDir, { recursive: true });
+}
 await applyTelegramRuntime();
 
 server.listen(PORT, HOST, () => {
@@ -677,6 +690,9 @@ server.listen(PORT, HOST, () => {
   console.log(`download dir: ${DOWNLOAD_DIR}`);
   console.log(`config file: ${APP_CONFIG_PATH}`);
   console.log(`state file: ${APP_STATE_PATH}`);
+  if (legacyMigration.config || legacyMigration.state) {
+    console.log('[config] migrated legacy app files into the dedicated config directory');
+  }
 
   if (ADMIN_TOKEN) {
     console.log('[security] admin token protection enabled');

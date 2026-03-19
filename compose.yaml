@@ -1,12 +1,15 @@
 services:
   rednote-downloader:
     build: .
+    user: "${PUID:-1000}:${PGID:-1000}"
     ports:
       - "3000:3000"
     environment:
       HOST: 0.0.0.0
       PORT: "3000"
       DOWNLOAD_DIR: /data/downloads
+      APP_CONFIG_PATH: /data/config/.rednote-config.json
+      APP_STATE_PATH: /data/config/.rednote-state.json
       XHS_COOKIE: ${XHS_COOKIE:-}
       MEDIA_REQUEST_TIMEOUT_MS: ${MEDIA_REQUEST_TIMEOUT_MS:-30000}
       TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-}
@@ -16,5 +19,5 @@ services:
       REDNOTE_ADMIN_TOKEN: ${REDNOTE_ADMIN_TOKEN:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     volumes:
-      - ./data:/data/downloads
+      - ${REDNOTE_DATA_DIR:-./data}:/data
     restart: unless-stopped

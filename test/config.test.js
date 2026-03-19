@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import {
+  getAppConfigPath,
   getAppStatePath,
   getPublicConfig,
   mergeAppConfig,
+  migrateLegacyAppFiles,
   normalizeEnvBoolean,
   sanitizeAppConfig,
   sanitizeAppState,
@@ -91,6 +96,69 @@ test('sanitizeAppState keeps a non-negative telegram offset', () => {
 test('getAppStatePath defaults next to the config file', () => {
   const result = getAppStatePath({}, '/tmp/rednote-data', '/tmp/rednote-data/.rednote-config.json');
   assert.equal(result, '/tmp/rednote-data/.rednote-state.json');
+});
+
+test('getAppConfigPath honors explicit APP_CONFIG_PATH', () => {
+  const result = getAppConfigPath({
+    APP_CONFIG_PATH: '/srv/rednote/config/.rednote-config.json',
+  }, '/tmp/rednote-data');
+
+  assert.equal(result, '/srv/rednote/config/.rednote-config.json');
+});
+
+test('migrateLegacyAppFiles copies legacy config and state into dedicated config dir', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'rednote-config-'));
+  const downloadDir = path.join(tempRoot, 'downloads');
+  const configDir = path.join(tempRoot, 'config');
+  const legacyConfigPath = path.join(downloadDir, '.rednote-config.json');
+  const legacyStatePath = path.join(downloadDir, '.rednote-state.json');
+  const nextConfigPath = path.join(configDir, '.rednote-config.json');
+  const nextStatePath = path.join(configDir, '.rednote-state.json');
+
+  await mkdir(downloadDir, { recursive: true });
+  await writeFile(legacyConfigPath, '{"telegram":{"enabled":true}}\n', 'utf8');
+  await writeFile(legacyStatePath, '{"telegram":{"updateOffset":12}}\n', 'utf8');
+
+  const result = await migrateLegacyAppFiles({
+    downloadDir,
+    configPath: nextConfigPath,
+    statePath: nextStatePath,
+  });
+
+  assert.deepEqual(result, {
+    config: true,
+    state: true,
+  });
+  assert.equal(await readFile(nextConfigPath, 'utf8'), '{"telegram":{"enabled":true}}\n');
+  assert.equal(await readFile(nextStatePath, 'utf8'), '{"telegram":{"updateOffset":12}}\n');
+});
+
+test('migrateLegacyAppFiles also picks files from the parent of downloadDir for Docker layout upgrades', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'rednote-config-parent-'));
+  const dataDir = path.join(tempRoot, 'data');
+  const downloadDir = path.join(dataDir, 'downloads');
+  const configDir = path.join(dataDir, 'config');
+  const legacyConfigPath = path.join(dataDir, '.rednote-config.json');
+  const legacyStatePath = path.join(dataDir, '.rednote-state.json');
+  const nextConfigPath = path.join(configDir, '.rednote-config.json');
+  const nextStatePath = path.join(configDir, '.rednote-state.json');
+
+  await mkdir(downloadDir, { recursive: true });
+  await writeFile(legacyConfigPath, '{"telegram":{"enabled":false}}\n', 'utf8');
+  await writeFile(legacyStatePath, '{"telegram":{"updateOffset":34}}\n', 'utf8');
+
+  const result = await migrateLegacyAppFiles({
+    downloadDir,
+    configPath: nextConfigPath,
+    statePath: nextStatePath,
+  });
+
+  assert.deepEqual(result, {
+    config: true,
+    state: true,
+  });
+  assert.equal(await readFile(nextConfigPath, 'utf8'), '{"telegram":{"enabled":false}}\n');
+  assert.equal(await readFile(nextStatePath, 'utf8'), '{"telegram":{"updateOffset":34}}\n');
 });
 
 test('normalizeEnvBoolean understands common truthy and falsy strings', () => {
