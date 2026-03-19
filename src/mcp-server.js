@@ -1,7 +1,7 @@
 import process from 'node:process';
 
 const SERVER_NAME = 'rednote-downloader';
-const SERVER_VERSION = '0.2.2';
+const SERVER_VERSION = '0.2.3';
 const DEFAULT_SERVICE_BASE_URL = process.env.REDNOTE_SERVICE_BASE_URL || 'http://127.0.0.1:3000';
 const TOOL_NAME = process.env.REDNOTE_MCP_TOOL_NAME || 'resolve_rednote_media';
 
