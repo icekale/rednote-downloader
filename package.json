@@ -1,6 +1,6 @@
 {
   "name": "rednote-downloader-service",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "private": true,
   "type": "module",
   "description": "A Docker-first self-hosted downloader for RedNote/Xiaohongshu and X/Twitter, with a web UI, Telegram delivery, and OpenClaw integration.",
@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "check:syntax": "node scripts/check-syntax.js",
     "test": "node --test"
   }
 }

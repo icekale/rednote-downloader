@@ -41,6 +41,26 @@ test('sanitizeAppConfig applies defaults and trims fields', () => {
   assert.equal(result.openclaw.mcpScriptPath, '/Users/demo/rednote/src/mcp-server.js');
 });
 
+test('sanitizeAppConfig keeps an empty OpenClaw service base url so the server can auto-detect origin', () => {
+  const result = sanitizeAppConfig({
+    openclaw: {
+      serviceBaseUrl: '   ',
+    },
+  });
+
+  assert.equal(result.openclaw.serviceBaseUrl, '');
+});
+
+test('sanitizeAppConfig drops invalid OpenClaw service base urls back to auto-detect mode', () => {
+  const result = sanitizeAppConfig({
+    openclaw: {
+      serviceBaseUrl: 'not-a-url',
+    },
+  });
+
+  assert.equal(result.openclaw.serviceBaseUrl, '');
+});
+
 test('mergeAppConfig preserves unspecified existing secrets', () => {
   const result = mergeAppConfig({
     telegram: {

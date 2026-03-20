@@ -1,5 +1,5 @@
 import { COOKIE_STORAGE_KEY, parseCookieText } from './cookie-utils.js';
-import { inferMediaFileName } from './media-filenames.js';
+import { inferMediaFileName } from '/media-filenames.js';
 
 const form = document.querySelector('#resolve-form');
 const input = document.querySelector('#input');
@@ -104,6 +104,7 @@ const TRANSLATIONS = {
     'openclaw.title': 'Agent 接入',
     'openclaw.note': '生成可直接复制的 mcporter 片段和 agent 提示词，用来把小红书或 X 的媒体直接回到 Telegram。',
     'openclaw.config.title': '连接参数',
+    'openclaw.config.serviceBaseAuto': '留空时自动使用当前访问地址',
     'openclaw.config.scriptPath': '宿主机 MCP 脚本路径',
     'openclaw.config.scriptPathPlaceholder': '/Users/you/.../rednote/src/mcp-server.js',
     'openclaw.save': '保存 OpenClaw 配置',
@@ -247,6 +248,7 @@ const TRANSLATIONS = {
     'openclaw.title': 'Agent Integration',
     'openclaw.note': 'Generate copy-ready mcporter snippets and agent prompts so RedNote or X media can be sent back to Telegram.',
     'openclaw.config.title': 'Connection Settings',
+    'openclaw.config.serviceBaseAuto': 'leave blank to use the current origin',
     'openclaw.config.scriptPath': 'Host MCP Script Path',
     'openclaw.config.scriptPathPlaceholder': '/Users/you/.../rednote/src/mcp-server.js',
     'openclaw.save': 'Save OpenClaw Config',
@@ -1149,7 +1151,8 @@ function applyConfigToForm(config, telegram) {
   telegramBotToken.value = '';
   telegramClearToken.checked = false;
 
-  openclawServiceBaseUrl.value = config.openclaw.serviceBaseUrl || window.location.origin;
+  openclawServiceBaseUrl.value = config.openclaw.serviceBaseUrl || '';
+  openclawServiceBaseUrl.placeholder = `${window.location.origin} (${t('openclaw.config.serviceBaseAuto')})`;
   openclawServerName.value = config.openclaw.mcpServerName || 'rednote';
   openclawAgentId.value = config.openclaw.preferredAgentId || 'bfxia';
   openclawMcpScriptPath.value = config.openclaw.mcpScriptPath || '';
@@ -1189,7 +1192,7 @@ async function loadFooterMeta() {
       footerVersionEl.textContent = `v${data.version}`;
     }
   } catch {
-    footerVersionEl.textContent = footerVersionEl.textContent || 'v0.2.14';
+    footerVersionEl.textContent = footerVersionEl.textContent || 'v0.2.17';
   }
 }
 
@@ -1241,7 +1244,7 @@ async function saveOpenClawConfig() {
       },
       body: JSON.stringify({
         openclaw: {
-          serviceBaseUrl: openclawServiceBaseUrl.value.trim() || window.location.origin,
+          serviceBaseUrl: openclawServiceBaseUrl.value.trim(),
           mcpServerName: openclawServerName.value.trim() || 'rednote',
           preferredAgentId: openclawAgentId.value.trim() || 'bfxia',
           mcpScriptPath: openclawMcpScriptPath.value.trim(),

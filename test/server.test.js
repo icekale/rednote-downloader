@@ -125,6 +125,19 @@ test('config writes persist to disk and return a masked public snapshot', async 
   assert.equal(savedConfig.telegram.allowedChatIds, '10001,10002');
 });
 
+test('OpenClaw template and diagnostics fall back to the current request origin when serviceBaseUrl is blank', async (t) => {
+  const { origin } = await createTestApp(t);
+
+  const template = await requestJson(`${origin}/api/openclaw/template`);
+  assert.equal(template.response.status, 200);
+  assert.equal(template.json.openclaw.serviceBaseUrl, origin);
+  assert.match(template.json.openclaw.mcporterSnippet, new RegExp(`"REDNOTE_SERVICE_BASE_URL": "${origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+
+  const diagnostics = await requestJson(`${origin}/api/diagnostics`);
+  assert.equal(diagnostics.response.status, 200);
+  assert.equal(diagnostics.json.diagnostics.openclaw.serviceBaseUrl, origin);
+});
+
 test('batch resolve honors the configured concurrency limit and preserves input order', async (t) => {
   let activeResolves = 0;
   let maxActiveResolves = 0;
@@ -222,4 +235,14 @@ test('media proxy falls back to alternate URLs and forwards range headers', asyn
   assert.equal(response.headers.get('content-type'), 'video/mp4');
   assert.equal(await response.text(), 'proxied-media');
   assert.deepEqual(seenRanges, ['bytes=0-12']);
+});
+
+test('shared media filename helper is served as a browser module', async (t) => {
+  const { origin } = await createTestApp(t);
+  const response = await fetch(`${origin}/media-filenames.js`);
+  const text = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'text/javascript; charset=utf-8');
+  assert.match(text, /export function inferMediaFileName/);
 });

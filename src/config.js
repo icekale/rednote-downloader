@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { access, copyFile, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 
-const DEFAULT_OPENCLAW_SERVICE_BASE_URL = 'http://127.0.0.1:3000';
+const DEFAULT_OPENCLAW_SERVICE_BASE_URL = '';
 const DEFAULT_MCP_SERVER_NAME = 'rednote';
 const DEFAULT_OPENCLAW_TOOL_NAME = 'resolve_rednote_media';
 
@@ -84,10 +84,10 @@ export function normalizeDeliveryMode(value) {
   return value === 'preview' ? 'preview' : 'document';
 }
 
-export function normalizeServiceBaseUrl(value) {
-  const trimmed = normalizeString(value, DEFAULT_OPENCLAW_SERVICE_BASE_URL);
+export function normalizeServiceBaseUrl(value, fallback = DEFAULT_OPENCLAW_SERVICE_BASE_URL) {
+  const trimmed = normalizeString(value, fallback);
   if (!trimmed) {
-    return DEFAULT_OPENCLAW_SERVICE_BASE_URL;
+    return fallback;
   }
 
   try {
@@ -97,7 +97,7 @@ export function normalizeServiceBaseUrl(value) {
     url.hash = '';
     return url.toString().replace(/\/$/, '');
   } catch {
-    return DEFAULT_OPENCLAW_SERVICE_BASE_URL;
+    return fallback;
   }
 }
 
@@ -113,7 +113,7 @@ export function sanitizeAppConfig(input = {}) {
       deliveryMode: normalizeDeliveryMode(telegram.deliveryMode || DEFAULT_APP_CONFIG.telegram.deliveryMode),
     },
     openclaw: {
-      serviceBaseUrl: normalizeServiceBaseUrl(openclaw.serviceBaseUrl || DEFAULT_APP_CONFIG.openclaw.serviceBaseUrl),
+      serviceBaseUrl: normalizeServiceBaseUrl(openclaw.serviceBaseUrl, DEFAULT_APP_CONFIG.openclaw.serviceBaseUrl),
       mcpServerName: normalizeString(openclaw.mcpServerName, DEFAULT_APP_CONFIG.openclaw.mcpServerName) || DEFAULT_MCP_SERVER_NAME,
       toolName: normalizeString(openclaw.toolName, DEFAULT_APP_CONFIG.openclaw.toolName) || DEFAULT_OPENCLAW_TOOL_NAME,
       preferredAgentId: normalizeString(openclaw.preferredAgentId, DEFAULT_APP_CONFIG.openclaw.preferredAgentId),

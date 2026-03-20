@@ -1,9 +1,9 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { inferMediaFileName, deriveNoteFileStem, sanitizeFileName } from '../public/media-filenames.js';
+import { inferMediaFileName, deriveNoteFileStem, sanitizeFileName } from './shared/media-filenames.js';
 import { mapWithConcurrency, normalizePositiveInt } from './async-utils.js';
 
 const XHS_SHARE_HOSTS = new Set([
@@ -31,6 +31,10 @@ const DEFAULT_TIMEOUT_MS = Number.parseInt(process.env.REQUEST_TIMEOUT_MS || '15
 const DEFAULT_MEDIA_TIMEOUT_MS = Number.parseInt(process.env.MEDIA_REQUEST_TIMEOUT_MS || '30000', 10);
 const DEFAULT_TWITTER_TIMEOUT_MS = Number.parseInt(process.env.TWITTER_REQUEST_TIMEOUT_MS || '30000', 10);
 const DEFAULT_DOWNLOAD_CONCURRENCY = normalizePositiveInt(process.env.MEDIA_DOWNLOAD_CONCURRENCY, 3);
+const DEFAULT_MEDIA_DOWNLOAD_RETRY_COUNT = (() => {
+  const value = Number.parseInt(process.env.MEDIA_DOWNLOAD_RETRY_COUNT || '1', 10);
+  return Number.isInteger(value) && value >= 0 ? value : 1;
+})();
 const FIXTWITTER_API_BASE = process.env.FXTWITTER_API_BASE || 'https://api.fxtwitter.com';
 const TWITTER_API_BASES = [
   FIXTWITTER_API_BASE,
@@ -80,7 +84,7 @@ export function extractAllUrls(input) {
   return urls;
 }
 
-export { deriveNoteFileStem, sanitizeFileName } from '../public/media-filenames.js';
+export { deriveNoteFileStem, sanitizeFileName } from './shared/media-filenames.js';
 
 export function withWritablePathHint(error, targetPath) {
   if (!error || typeof error !== 'object') {
@@ -644,54 +648,77 @@ function inferExtension(url, contentType, fallback) {
   return fallback;
 }
 
-async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, sequenceNumber, totalItems) {
+function isRetryableMediaDownloadError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return error?.name === 'AbortError'
+    || /timed out|terminated|fetch failed|socket|other side closed|ECONNRESET|EPIPE|UND_ERR/i.test(message)
+    || /Failed to download media: (408|425|429|500|502|503|504)\b/i.test(message);
+}
+
+async function removePartialFile(targetPath) {
+  if (!targetPath) {
+    return;
+  }
+
+  try {
+    await unlink(targetPath);
+  } catch (error) {
+    if (!(error && typeof error === 'object' && error.code === 'ENOENT')) {
+      throw error;
+    }
+  }
+}
+
+async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, retryCount, sequenceNumber, totalItems) {
   const candidates = [
     item.url,
     ...(Array.isArray(item.fallbackUrls) ? item.fallbackUrls : []),
   ].filter(Boolean);
   const uniqueCandidates = [...new Set(candidates)];
   const errors = [];
-  let resolved = null;
 
   for (const candidate of uniqueCandidates) {
-    try {
-      resolved = await fetchMediaResponse(candidate, {
-        cookie,
-        timeoutMs,
-      });
-      break;
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
+    for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+      let absolutePath = '';
+
+      try {
+        const resolved = await fetchMediaResponse(candidate, {
+          cookie,
+          timeoutMs,
+        });
+        const { url, response } = resolved;
+        const extension = inferExtension(url.toString(), response.headers.get('content-type'), item.type === 'video' ? 'mp4' : 'jpg');
+        const fileName = inferMediaFileName(item, null, sequenceNumber - 1, {
+          baseName,
+          extension,
+          totalItems,
+          fallbackBaseName: 'media',
+        });
+        absolutePath = path.join(outputDir, fileName);
+
+        await pipeline(Readable.fromWeb(response.body), createWriteStream(absolutePath));
+
+        return {
+          ...item,
+          url: url.toString(),
+          fileName,
+          absolutePath,
+        };
+      } catch (error) {
+        await removePartialFile(absolutePath);
+
+        if (attempt < retryCount && isRetryableMediaDownloadError(error)) {
+          continue;
+        }
+
+        errors.push(error instanceof Error ? error.message : String(error));
+        break;
+      }
     }
   }
 
-  if (!resolved) {
-    throw new Error(errors[0] || 'Failed to download media');
-  }
-
-  const { url, response } = resolved;
-
-  const extension = inferExtension(url.toString(), response.headers.get('content-type'), item.type === 'video' ? 'mp4' : 'jpg');
-  const fileName = inferMediaFileName(item, null, sequenceNumber - 1, {
-    baseName,
-    extension,
-    totalItems,
-    fallbackBaseName: 'media',
-  });
-  const absolutePath = path.join(outputDir, fileName);
-
-  try {
-    await pipeline(Readable.fromWeb(response.body), createWriteStream(absolutePath));
-  } catch (error) {
-    throw withWritablePathHint(error, absolutePath);
-  }
-
-  return {
-    ...item,
-    url: url.toString(),
-    fileName,
-    absolutePath,
-  };
+  throw new Error(errors[0] || 'Failed to download media');
 }
 
 export async function fetchMediaResponse(input, options = {}) {
@@ -731,6 +758,9 @@ export async function fetchMediaResponse(input, options = {}) {
 export async function downloadMedia(media, noteTitle, noteId, downloadDir, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
   const concurrency = normalizePositiveInt(options.concurrency, DEFAULT_DOWNLOAD_CONCURRENCY);
+  const retryCount = Number.isInteger(options.retryCount) && options.retryCount >= 0
+    ? options.retryCount
+    : DEFAULT_MEDIA_DOWNLOAD_RETRY_COUNT;
   const cookie = options.cookie || process.env.XHS_COOKIE;
   const fileStem = deriveNoteFileStem(noteTitle, options.noteDescription, noteId || 'note');
   const safeDirName = sanitizeFileName(`${fileStem}_${noteId || 'unknown'}`);
@@ -748,7 +778,7 @@ export async function downloadMedia(media, noteTitle, noteId, downloadDir, optio
     const sequenceNumber = Number.isInteger(explicitIndex) && explicitIndex > 0
       ? explicitIndex
       : itemIndex + 1;
-    return downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, sequenceNumber, media.length);
+    return downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, retryCount, sequenceNumber, media.length);
   });
 
   return {

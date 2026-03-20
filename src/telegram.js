@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { normalizeEnvBoolean } from './config.js';
-import { inferMediaFileName } from '../public/media-filenames.js';
+import { inferMediaFileName } from './shared/media-filenames.js';
 import { extractFirstUrl, fetchMediaResponse, resolveNote } from './xhs.js';
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';

@@ -37,7 +37,7 @@ const DEFAULT_STATIC_ROUTES = new Map([
   ['/app.js', 'app.js'],
   ['/cookie-utils.js', 'cookie-utils.js'],
   ['/icon.svg', 'icon.svg'],
-  ['/media-filenames.js', 'media-filenames.js'],
+  ['/media-filenames.js', path.join(process.cwd(), 'src', 'shared', 'media-filenames.js')],
   ['/styles.css', 'styles.css'],
 ]);
 
@@ -496,16 +496,18 @@ export async function createRednoteApp(options = {}) {
   }
 
   async function handleStatic(response, pathname) {
-    const fileName = settings.staticRoutes.get(pathname);
-    if (!fileName) {
+    const fileRef = settings.staticRoutes.get(pathname);
+    if (!fileRef) {
       return false;
     }
 
-    const absolutePath = path.join(settings.publicDir, fileName);
+    const absolutePath = path.isAbsolute(fileRef)
+      ? fileRef
+      : path.join(settings.publicDir, fileRef);
     const content = await readFile(absolutePath);
 
     response.writeHead(200, {
-      'Content-Type': contentTypeFromFileName(fileName),
+      'Content-Type': contentTypeFromFileName(path.basename(absolutePath)),
     });
     response.end(content);
     return true;
@@ -611,7 +613,7 @@ export async function createRednoteApp(options = {}) {
     const origin = getRequestOrigin(request, settings.port);
     const url = new URL(request.url, origin);
     const language = normalizeUiLanguage(url.searchParams.get('lang'));
-    const serviceBaseUrl = normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl || origin);
+    const serviceBaseUrl = normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl, origin);
     const template = buildOpenClawTemplate({
       serviceBaseUrl,
       serverName: config.openclaw.mcpServerName,
@@ -669,7 +671,7 @@ export async function createRednoteApp(options = {}) {
   async function handleOpenClawTemplate(request, response) {
     const config = getPublicConfig(appConfig);
     const template = buildOpenClawTemplate({
-      serviceBaseUrl: normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl || getRequestOrigin(request, settings.port)),
+      serviceBaseUrl: normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl, getRequestOrigin(request, settings.port)),
       serverName: config.openclaw.mcpServerName,
       toolName: config.openclaw.toolName,
       preferredAgentId: config.openclaw.preferredAgentId,
@@ -699,9 +701,8 @@ export async function createRednoteApp(options = {}) {
 
     const note = await resolveNoteImpl(input, { cookie });
     const baseUrl = normalizeServiceBaseUrl(
-      body.serviceBaseUrl
-      || appConfig.openclaw.serviceBaseUrl
-      || getRequestOrigin(request, settings.port),
+      body.serviceBaseUrl || appConfig.openclaw.serviceBaseUrl,
+      getRequestOrigin(request, settings.port),
     );
 
     sendJson(request, response, 200, {

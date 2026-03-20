@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, readdir } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import {
   buildFixTwitterApiUrl,
   deriveNoteFileStem,
@@ -451,6 +451,118 @@ test('downloadMedia honors the configured concurrency limit while preserving res
       result.files.map((item) => item.fileName),
       ['并发下载测试_01.mp4', '并发下载测试_02.mp4', '并发下载测试_03.mp4'],
     );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('downloadMedia retries transient stream failures for the same media URL', async () => {
+  const originalFetch = global.fetch;
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-download-'));
+  let requestCount = 0;
+
+  global.fetch = async () => {
+    requestCount += 1;
+
+    if (requestCount === 1) {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2, 3]));
+            controller.error(new Error('socket terminated'));
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4',
+          },
+        },
+      );
+    }
+
+    return new Response(
+      new Uint8Array([9, 8, 7, 6]),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'video/mp4',
+        },
+      },
+    );
+  };
+
+  try {
+    const result = await downloadMedia(
+      [
+        {
+          index: 1,
+          type: 'video',
+          url: 'https://video.twimg.com/demo/retry.mp4',
+        },
+      ],
+      'X @demo_user',
+      'note999',
+      tempDir,
+      {
+        noteDescription: '重试下载测试',
+        retryCount: 1,
+      },
+    );
+
+    assert.equal(requestCount, 2);
+    assert.equal(result.files[0].fileName, '重试下载测试.mp4');
+    assert.deepEqual(
+      Array.from(await readFile(result.files[0].absolutePath)),
+      [9, 8, 7, 6],
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('downloadMedia removes partial files when all retry attempts fail', async () => {
+  const originalFetch = global.fetch;
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-download-'));
+
+  global.fetch = async () => new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.error(new Error('socket terminated'));
+      },
+    }),
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'video/mp4',
+      },
+    },
+  );
+
+  try {
+    await assert.rejects(
+      downloadMedia(
+        [
+          {
+            index: 1,
+            type: 'video',
+            url: 'https://video.twimg.com/demo/fail.mp4',
+          },
+        ],
+        'X @demo_user',
+        'note1000',
+        tempDir,
+        {
+          noteDescription: '失败清理测试',
+          retryCount: 0,
+        },
+      ),
+      /socket terminated/,
+    );
+
+    const outputDir = path.join(tempDir, '失败清理测试_note1000');
+    assert.deepEqual(await readdir(outputDir), []);
   } finally {
     global.fetch = originalFetch;
   }

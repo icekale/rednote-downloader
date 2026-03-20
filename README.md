@@ -75,7 +75,7 @@
 {
   "input": "小红书分享文案、x.com/twitter.com 链接，或者分享文本",
   "cookie": "可选",
-  "serviceBaseUrl": "可选，覆盖返回的代理 media URL 根地址"
+  "serviceBaseUrl": "可选，覆盖返回的代理 media URL 根地址；省略时自动使用当前请求地址"
 }
 ```
 
@@ -105,6 +105,8 @@ http://127.0.0.1:3000/
 
 - `Telegram Bot 配置`
 - `OpenClaw Agent 接入`
+
+如果网页里的 `OpenClaw 服务地址` 留空，控制台会自动使用你当前访问这个页面的地址，反代或临时换端口时不用手改。
 
 示例：
 
@@ -164,7 +166,7 @@ docker compose up --build
 docker compose -f compose.hub.yaml up -d
 ```
 
-`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.16`。
+`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.17`。
 
 如果你是 Unraid 用户，可以直接使用单独的：
 
@@ -313,7 +315,7 @@ src/mcp-server.js
 - `push` 到 `main` 和 PR 时自动执行 `npm test`
 - 文件位置：`.github/workflows/docker-publish.yml`
 - `push` 到 `main` 时自动推送 `latest`
-- 推送形如 `v0.2.16` 的 tag 时自动推送对应版本标签
+- 推送形如 `v0.2.17` 的 tag 时自动推送对应版本标签
 - 同时构建 `linux/amd64` 和 `linux/arm64`
 - 发 GitHub Release 时，建议先检查 [CHANGELOG.md](/Users/kale/Documents/openclaw/rednote/CHANGELOG.md) 里的 `Unreleased` 段，避免遗漏最近修复
 
@@ -338,6 +340,7 @@ src/mcp-server.js
 - `REQUEST_TIMEOUT_MS`: 可选。请求超时，默认 `15000`
 - `BATCH_RESOLVE_CONCURRENCY`: 可选。批量解析多个链接时的并发数，默认 `3`
 - `MEDIA_DOWNLOAD_CONCURRENCY`: 可选。服务端下载同一帖子多媒体时的并发数，默认 `3`
+- `MEDIA_DOWNLOAD_RETRY_COUNT`: 可选。媒体下载遇到瞬时断流时，对同一候选直链重试的次数，默认 `1`
 - `MEDIA_REQUEST_TIMEOUT_MS`: 可选。媒体请求的首包超时，默认 `30000`
 - `TELEGRAM_ENABLED`: 可选。设为 `false` / `0` 时禁用 Telegram 轮询器；默认只要环境或已保存配置里有 token 就启用
 - `TELEGRAM_BOT_TOKEN`: 可选。启用 Telegram bot 模式

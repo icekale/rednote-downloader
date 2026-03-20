@@ -35,10 +35,10 @@ docker run -d \
   -e PUID="$(id -u)" \
   -e PGID="$(id -g)" \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.16
+  icekale/rednote-downloader:v0.2.17
 ```
 
-If you prefer a floating tag, replace `v0.2.16` with `latest`.
+If you prefer a floating tag, replace `v0.2.17` with `latest`.
 
 Then open:
 
@@ -51,7 +51,7 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.16
+    image: icekale/rednote-downloader:v0.2.17
     container_name: rednote-downloader
     ports:
       - "3000:3000"
@@ -66,6 +66,9 @@ services:
       XHS_COOKIE: ${XHS_COOKIE:-}
       XHS_USER_AGENT: ${XHS_USER_AGENT:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-15000}
+      BATCH_RESOLVE_CONCURRENCY: ${BATCH_RESOLVE_CONCURRENCY:-3}
+      MEDIA_DOWNLOAD_CONCURRENCY: ${MEDIA_DOWNLOAD_CONCURRENCY:-3}
+      MEDIA_DOWNLOAD_RETRY_COUNT: ${MEDIA_DOWNLOAD_RETRY_COUNT:-1}
       MEDIA_REQUEST_TIMEOUT_MS: ${MEDIA_REQUEST_TIMEOUT_MS:-30000}
       TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -106,6 +109,7 @@ REDNOTE_DATA_DIR=/mnt/user/appdata/rednote docker compose -f compose.unraid.yaml
 - `REQUEST_TIMEOUT_MS`: optional request timeout in milliseconds, default `15000`
 - `BATCH_RESOLVE_CONCURRENCY`: optional concurrency for batch resolving multiple links, default `3`
 - `MEDIA_DOWNLOAD_CONCURRENCY`: optional concurrency for server-side downloads within one post, default `3`
+- `MEDIA_DOWNLOAD_RETRY_COUNT`: optional retries for the same media URL after a transient disconnect, default `1`
 - `MEDIA_REQUEST_TIMEOUT_MS`: optional timeout for receiving media response headers, default `30000`
 - `TELEGRAM_ENABLED`: optional; set to `false` / `0` to disable the Telegram polling bot
 - `TELEGRAM_BOT_TOKEN`: optional Telegram bot token

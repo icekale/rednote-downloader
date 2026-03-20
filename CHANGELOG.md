@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.2.17 - 2026-03-21
+
+- Let the OpenClaw service base URL stay blank in saved config so the dashboard, diagnostics, and resolve payloads automatically follow the current request origin. This makes reverse proxies, alternate local ports, and temporary sidecar instances work without hand-editing the service URL.
+- Move shared media filename generation into a neutral server/client module so browser proxy downloads, server-side downloads, Telegram uploads, and OpenClaw proxy links all use the same predictable naming logic.
+- Add retries for transient media stream disconnects plus cleanup of partial files, so upstream CDN hiccups are less likely to leave failed downloads or truncated leftovers on disk.
+- Expand automated validation with syntax checks, Node 20/22 CI coverage, config/HTTP integration tests for OpenClaw auto-origin behavior, and static-module serving tests for the browser filename helper.
+
 ## v0.2.16 - 2026-03-20
 
 - Unify media filename generation across server downloads, browser proxy downloads, Telegram uploads, and OpenClaw proxy links so the same post resolves to the same predictable file names everywhere.

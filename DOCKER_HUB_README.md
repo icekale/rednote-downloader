@@ -35,7 +35,7 @@ docker run -d \
   -e PUID="$(id -u)" \
   -e PGID="$(id -g)" \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.16
+  icekale/rednote-downloader:v0.2.17
 ```
 
 如果你希望始终跟随最新镜像，也可以把 tag 换成 `latest`。
@@ -51,7 +51,7 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.16
+    image: icekale/rednote-downloader:v0.2.17
     container_name: rednote-downloader
     ports:
       - "3000:3000"
@@ -66,6 +66,9 @@ services:
       XHS_COOKIE: ${XHS_COOKIE:-}
       XHS_USER_AGENT: ${XHS_USER_AGENT:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-15000}
+      BATCH_RESOLVE_CONCURRENCY: ${BATCH_RESOLVE_CONCURRENCY:-3}
+      MEDIA_DOWNLOAD_CONCURRENCY: ${MEDIA_DOWNLOAD_CONCURRENCY:-3}
+      MEDIA_DOWNLOAD_RETRY_COUNT: ${MEDIA_DOWNLOAD_RETRY_COUNT:-1}
       MEDIA_REQUEST_TIMEOUT_MS: ${MEDIA_REQUEST_TIMEOUT_MS:-30000}
       TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -106,6 +109,7 @@ REDNOTE_DATA_DIR=/mnt/user/appdata/rednote docker compose -f compose.unraid.yaml
 - `REQUEST_TIMEOUT_MS`: 可选，请求超时，默认 `15000`
 - `BATCH_RESOLVE_CONCURRENCY`: 可选，批量解析多个链接时的并发数，默认 `3`
 - `MEDIA_DOWNLOAD_CONCURRENCY`: 可选，同一帖子多媒体服务端下载并发数，默认 `3`
+- `MEDIA_DOWNLOAD_RETRY_COUNT`: 可选，同一媒体直链遇到瞬时断流时的重试次数，默认 `1`
 - `MEDIA_REQUEST_TIMEOUT_MS`: 可选，媒体请求首包超时，默认 `30000`
 - `TELEGRAM_ENABLED`: 可选，设为 `false` / `0` 时禁用 Telegram 轮询器
 - `TELEGRAM_BOT_TOKEN`: 可选，Telegram bot token
