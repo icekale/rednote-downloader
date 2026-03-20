@@ -35,7 +35,7 @@ docker run -d \
   -e PUID="$(id -u)" \
   -e PGID="$(id -g)" \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.15
+  icekale/rednote-downloader:v0.2.16
 ```
 
 如果你希望始终跟随最新镜像，也可以把 tag 换成 `latest`。
@@ -51,7 +51,7 @@ http://127.0.0.1:3000/
 ```yaml
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.15
+    image: icekale/rednote-downloader:v0.2.16
     container_name: rednote-downloader
     ports:
       - "3000:3000"

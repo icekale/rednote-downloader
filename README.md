@@ -164,7 +164,7 @@ docker compose up --build
 docker compose -f compose.hub.yaml up -d
 ```
 
-`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.15`。
+`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.16`。
 
 如果你是 Unraid 用户，可以直接使用单独的：
 
@@ -313,7 +313,7 @@ src/mcp-server.js
 - `push` 到 `main` 和 PR 时自动执行 `npm test`
 - 文件位置：`.github/workflows/docker-publish.yml`
 - `push` 到 `main` 时自动推送 `latest`
-- 推送形如 `v0.2.15` 的 tag 时自动推送对应版本标签
+- 推送形如 `v0.2.16` 的 tag 时自动推送对应版本标签
 - 同时构建 `linux/amd64` 和 `linux/arm64`
 - 发 GitHub Release 时，建议先检查 [CHANGELOG.md](/Users/kale/Documents/openclaw/rednote/CHANGELOG.md) 里的 `Unreleased` 段，避免遗漏最近修复
 
