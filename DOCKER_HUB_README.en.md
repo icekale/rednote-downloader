@@ -104,6 +104,8 @@ REDNOTE_DATA_DIR=/mnt/user/appdata/rednote docker compose -f compose.unraid.yaml
 - `XHS_COOKIE`: optional manual cookie header for protected RedNote posts
 - `XHS_USER_AGENT`: optional custom request user agent
 - `REQUEST_TIMEOUT_MS`: optional request timeout in milliseconds, default `15000`
+- `BATCH_RESOLVE_CONCURRENCY`: optional concurrency for batch resolving multiple links, default `3`
+- `MEDIA_DOWNLOAD_CONCURRENCY`: optional concurrency for server-side downloads within one post, default `3`
 - `MEDIA_REQUEST_TIMEOUT_MS`: optional timeout for receiving media response headers, default `30000`
 - `TELEGRAM_ENABLED`: optional; set to `false` / `0` to disable the Telegram polling bot
 - `TELEGRAM_BOT_TOKEN`: optional Telegram bot token

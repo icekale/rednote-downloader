@@ -6,7 +6,8 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { normalizeEnvBoolean } from './config.js';
-import { extractFirstUrl, fetchMediaResponse, resolveNote, sanitizeFileName } from './xhs.js';
+import { inferMediaFileName } from '../public/media-filenames.js';
+import { extractFirstUrl, fetchMediaResponse, resolveNote } from './xhs.js';
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
 const POLL_TIMEOUT_SECONDS = 30;
@@ -51,20 +52,10 @@ export function buildTelegramCaption(note) {
 }
 
 export function inferTelegramFileName(item, note, index) {
-  if (item.fileName) {
-    return item.fileName;
-  }
-
-  const base = sanitizeFileName(note?.title || note?.noteId || 'rednote');
-  const url = item?.url || '';
-  const match = url.match(/\.([a-z0-9]{2,5})(?:$|[?#])/i);
-  const ext = match?.[1] || (item?.type === 'video' ? 'mp4' : 'jpg');
-
-  if (item?.type === 'video') {
-    return `${base}.${ext}`;
-  }
-
-  return `${base}_${String(index + 1).padStart(2, '0')}.${ext}`;
+  return inferMediaFileName(item, note, index, {
+    totalItems: Array.isArray(note?.media) ? note.media.length : 1,
+    fallbackBaseName: 'rednote',
+  });
 }
 
 export function isTelegramChatAllowed(chatId, allowedChatIds) {

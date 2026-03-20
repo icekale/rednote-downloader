@@ -104,6 +104,8 @@ REDNOTE_DATA_DIR=/mnt/user/appdata/rednote docker compose -f compose.unraid.yaml
 - `XHS_COOKIE`: 可选，给受限小红书帖子补 Cookie
 - `XHS_USER_AGENT`: 可选，自定义请求 UA
 - `REQUEST_TIMEOUT_MS`: 可选，请求超时，默认 `15000`
+- `BATCH_RESOLVE_CONCURRENCY`: 可选，批量解析多个链接时的并发数，默认 `3`
+- `MEDIA_DOWNLOAD_CONCURRENCY`: 可选，同一帖子多媒体服务端下载并发数，默认 `3`
 - `MEDIA_REQUEST_TIMEOUT_MS`: 可选，媒体请求首包超时，默认 `30000`
 - `TELEGRAM_ENABLED`: 可选，设为 `false` / `0` 时禁用 Telegram 轮询器
 - `TELEGRAM_BOT_TOKEN`: 可选，Telegram bot token

@@ -3,6 +3,8 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { inferMediaFileName, deriveNoteFileStem, sanitizeFileName } from '../public/media-filenames.js';
+import { mapWithConcurrency, normalizePositiveInt } from './async-utils.js';
 
 const XHS_SHARE_HOSTS = new Set([
   'xhslink.com',
@@ -28,6 +30,7 @@ const MEDIA_HOST_SUFFIXES = [
 const DEFAULT_TIMEOUT_MS = Number.parseInt(process.env.REQUEST_TIMEOUT_MS || '15000', 10);
 const DEFAULT_MEDIA_TIMEOUT_MS = Number.parseInt(process.env.MEDIA_REQUEST_TIMEOUT_MS || '30000', 10);
 const DEFAULT_TWITTER_TIMEOUT_MS = Number.parseInt(process.env.TWITTER_REQUEST_TIMEOUT_MS || '30000', 10);
+const DEFAULT_DOWNLOAD_CONCURRENCY = normalizePositiveInt(process.env.MEDIA_DOWNLOAD_CONCURRENCY, 3);
 const FIXTWITTER_API_BASE = process.env.FXTWITTER_API_BASE || 'https://api.fxtwitter.com';
 const TWITTER_API_BASES = [
   FIXTWITTER_API_BASE,
@@ -77,15 +80,7 @@ export function extractAllUrls(input) {
   return urls;
 }
 
-export function sanitizeFileName(input, fallback = 'note') {
-  const safe = String(input || '')
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80);
-
-  return safe || fallback;
-}
+export { deriveNoteFileStem, sanitizeFileName } from '../public/media-filenames.js';
 
 export function withWritablePathHint(error, targetPath) {
   if (!error || typeof error !== 'object') {
@@ -106,21 +101,6 @@ export function withWritablePathHint(error, targetPath) {
   wrapped.code = code;
   wrapped.cause = error;
   return wrapped;
-}
-
-function normalizeNoteText(input) {
-  return String(input || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 48);
-}
-
-export function deriveNoteFileStem(title, description, fallback = 'note') {
-  const normalizedTitle = normalizeNoteText(title);
-  const normalizedDescription = normalizeNoteText(description);
-  const genericTitle = /^X\s*@/i.test(normalizedTitle) || /^X\s+Post$/i.test(normalizedTitle);
-  const candidate = normalizedDescription || (!genericTitle ? normalizedTitle : '') || fallback;
-  return sanitizeFileName(candidate, fallback);
 }
 
 function isAllowedShareHost(hostname) {
@@ -664,14 +644,6 @@ function inferExtension(url, contentType, fallback) {
   return fallback;
 }
 
-function buildDownloadedMediaFileName(item, baseName, extension, sequenceNumber, totalItems) {
-  if (item.type === 'video' && totalItems <= 1) {
-    return `${baseName}.${extension}`;
-  }
-
-  return `${baseName}_${String(sequenceNumber).padStart(2, '0')}.${extension}`;
-}
-
 async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, sequenceNumber, totalItems) {
   const candidates = [
     item.url,
@@ -700,7 +672,12 @@ async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, se
   const { url, response } = resolved;
 
   const extension = inferExtension(url.toString(), response.headers.get('content-type'), item.type === 'video' ? 'mp4' : 'jpg');
-  const fileName = buildDownloadedMediaFileName(item, baseName, extension, sequenceNumber, totalItems);
+  const fileName = inferMediaFileName(item, null, sequenceNumber - 1, {
+    baseName,
+    extension,
+    totalItems,
+    fallbackBaseName: 'media',
+  });
   const absolutePath = path.join(outputDir, fileName);
 
   try {
@@ -753,6 +730,7 @@ export async function fetchMediaResponse(input, options = {}) {
 
 export async function downloadMedia(media, noteTitle, noteId, downloadDir, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
+  const concurrency = normalizePositiveInt(options.concurrency, DEFAULT_DOWNLOAD_CONCURRENCY);
   const cookie = options.cookie || process.env.XHS_COOKIE;
   const fileStem = deriveNoteFileStem(noteTitle, options.noteDescription, noteId || 'note');
   const safeDirName = sanitizeFileName(`${fileStem}_${noteId || 'unknown'}`);
@@ -765,15 +743,13 @@ export async function downloadMedia(media, noteTitle, noteId, downloadDir, optio
   }
 
   const baseName = fileStem;
-  const results = [];
-
-  for (const [itemIndex, item] of media.entries()) {
+  const results = await mapWithConcurrency(media, concurrency, async (item, itemIndex) => {
     const explicitIndex = Number(item?.index);
     const sequenceNumber = Number.isInteger(explicitIndex) && explicitIndex > 0
       ? explicitIndex
       : itemIndex + 1;
-    results.push(await downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, sequenceNumber, media.length));
-  }
+    return downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, sequenceNumber, media.length);
+  });
 
   return {
     outputDir,

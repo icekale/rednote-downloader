@@ -309,6 +309,8 @@ src/mcp-server.js
 
 仓库已经预留了 GitHub Actions 自动发布工作流：
 
+- 文件位置：`.github/workflows/test.yml`
+- `push` 到 `main` 和 PR 时自动执行 `npm test`
 - 文件位置：`.github/workflows/docker-publish.yml`
 - `push` 到 `main` 时自动推送 `latest`
 - 推送形如 `v0.2.15` 的 tag 时自动推送对应版本标签
@@ -334,6 +336,8 @@ src/mcp-server.js
 - `XHS_COOKIE`: 可选。公开页面被风控时可以尝试带上浏览器 Cookie
 - `XHS_USER_AGENT`: 可选。覆盖默认浏览器 UA
 - `REQUEST_TIMEOUT_MS`: 可选。请求超时，默认 `15000`
+- `BATCH_RESOLVE_CONCURRENCY`: 可选。批量解析多个链接时的并发数，默认 `3`
+- `MEDIA_DOWNLOAD_CONCURRENCY`: 可选。服务端下载同一帖子多媒体时的并发数，默认 `3`
 - `MEDIA_REQUEST_TIMEOUT_MS`: 可选。媒体请求的首包超时，默认 `30000`
 - `TELEGRAM_ENABLED`: 可选。设为 `false` / `0` 时禁用 Telegram 轮询器；默认只要环境或已保存配置里有 token 就启用
 - `TELEGRAM_BOT_TOKEN`: 可选。启用 Telegram bot 模式

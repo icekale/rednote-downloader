@@ -1,4 +1,5 @@
 import { COOKIE_STORAGE_KEY, parseCookieText } from './cookie-utils.js';
+import { inferMediaFileName } from './media-filenames.js';
 
 const form = document.querySelector('#resolve-form');
 const input = document.querySelector('#input');
@@ -348,13 +349,6 @@ const TRANSLATIONS = {
 
 let currentLang = resolveInitialLanguage();
 
-function normalizeNoteText(input) {
-  return String(input || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 48);
-}
-
 function resolveInitialLanguage() {
   const saved = window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY);
   if (saved === 'zh' || saved === 'en') {
@@ -425,13 +419,6 @@ function setLanguage(lang, { persist = true, reloadRemote = true } = {}) {
   }
 }
 
-function deriveNoteFileStem(note) {
-  const title = normalizeNoteText(note?.title);
-  const description = normalizeNoteText(note?.description);
-  const genericTitle = /^X\s*@/i.test(title) || /^X\s+Post$/i.test(title);
-  return description || (!genericTitle ? title : '') || note?.noteId || 'rednote-media';
-}
-
 function setMessage(element, message, tone = '') {
   element.textContent = message;
   element.classList.remove('error', 'success');
@@ -499,48 +486,12 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-function guessExtension(item) {
-  try {
-    const pathname = new URL(item.url).pathname;
-    const match = pathname.match(/\.([a-z0-9]{2,5})$/i);
-    if (match?.[1]) {
-      return match[1];
-    }
-  } catch {
-    return item.type === 'video' ? 'mp4' : 'jpg';
-  }
-
-  return item.type === 'video' ? 'mp4' : 'jpg';
-}
-
-function sanitizeStem(value, fallback = 'rednote-media') {
-  return String(value || '')
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80) || fallback;
-}
-
 function buildEntryFileName(note, item, index, options = {}) {
-  const extension = guessExtension(item);
-  if (item.fileName) {
-    return item.fileName;
-  }
-
-  const batch = Boolean(options.batch);
-  const totalItems = Number.isFinite(options.totalItems) ? options.totalItems : 1;
-  const stem = sanitizeStem(deriveNoteFileStem(note), 'rednote-media');
-  const baseName = batch && note?.noteId ? `${stem}_${note.noteId}` : stem;
-
-  if (item.type === 'video') {
-    if (totalItems <= 1) {
-      return `${baseName}.${extension}`;
-    }
-
-    return `${baseName}_${String(index + 1).padStart(2, '0')}.${extension}`;
-  }
-
-  return `${baseName}_${String(index + 1).padStart(2, '0')}.${extension}`;
+  return inferMediaFileName(item, note, index, {
+    batch: Boolean(options.batch),
+    totalItems: Number.isFinite(options.totalItems) ? options.totalItems : 1,
+    fallbackBaseName: 'rednote-media',
+  });
 }
 
 function createMediaEntry(note, item, index, options = {}) {

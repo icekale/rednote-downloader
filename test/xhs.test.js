@@ -392,3 +392,66 @@ test('downloadMedia assigns unique indexed filenames to multiple videos in the s
     global.fetch = originalFetch;
   }
 });
+
+test('downloadMedia honors the configured concurrency limit while preserving result order', async () => {
+  const originalFetch = global.fetch;
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-download-'));
+  let activeRequests = 0;
+  let maxActiveRequests = 0;
+
+  global.fetch = async (url) => {
+    const value = String(url);
+    activeRequests += 1;
+    maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+
+    await new Promise((resolve) => setTimeout(resolve, value.includes('slow') ? 30 : 10));
+
+    activeRequests -= 1;
+    return new Response(
+      new Uint8Array([1, 2, 3, 4]),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'video/mp4',
+        },
+      },
+    );
+  };
+
+  try {
+    const result = await downloadMedia(
+      [
+        {
+          index: 1,
+          type: 'video',
+          url: 'https://video.twimg.com/demo/slow.mp4',
+        },
+        {
+          index: 2,
+          type: 'video',
+          url: 'https://video.twimg.com/demo/fast-a.mp4',
+        },
+        {
+          index: 3,
+          type: 'video',
+          url: 'https://video.twimg.com/demo/fast-b.mp4',
+        },
+      ],
+      'X @demo_user',
+      'note789',
+      tempDir,
+      {
+        noteDescription: '并发下载测试',
+        concurrency: 2,
+      },
+    );
+
+    assert.equal(maxActiveRequests, 2);
+    assert.deepEqual(
+      result.files.map((item) => item.fileName),
+      ['并发下载测试_01.mp4', '并发下载测试_02.mp4', '并发下载测试_03.mp4'],
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
