@@ -313,6 +313,7 @@ src/mcp-server.js
 - `push` 到 `main` 时自动推送 `latest`
 - 推送形如 `v0.2.14` 的 tag 时自动推送对应版本标签
 - 同时构建 `linux/amd64` 和 `linux/arm64`
+- 发 GitHub Release 时，建议先检查 [CHANGELOG.md](/Users/kale/Documents/openclaw/rednote/CHANGELOG.md) 里的 `Unreleased` 段，避免遗漏最近修复
 
 在 GitHub 仓库里补两个 Actions secrets 即可启用：
 
