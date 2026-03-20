@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readdir } from 'node:fs/promises';
 import {
   buildFixTwitterApiUrl,
   deriveNoteFileStem,
@@ -327,6 +327,67 @@ test('downloadMedia falls back to alternate media urls when the primary url fail
     assert.equal(result.files[0].url, 'https://video.twimg.com/demo/fallback.mp4');
     assert.match(result.files[0].absolutePath, /这是一个用于测试服务端下载命名的帖子文案_note123/);
     assert.match(result.files[0].fileName, /^这是一个用于测试服务端下载命名的帖子文案\.mp4$/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('downloadMedia assigns unique indexed filenames to multiple videos in the same post', async () => {
+  const originalFetch = global.fetch;
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-download-'));
+  let responseId = 0;
+
+  global.fetch = async (url) => {
+    const value = String(url);
+    responseId += 1;
+
+    if (!value.includes('video.twimg.com')) {
+      throw new Error(`Unexpected url ${value}`);
+    }
+
+    return new Response(
+      new Uint8Array([responseId, responseId + 1, responseId + 2]),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'video/mp4',
+        },
+      },
+    );
+  };
+
+  try {
+    const result = await downloadMedia(
+      [
+        {
+          index: 1,
+          type: 'video',
+          url: 'https://video.twimg.com/demo/first.mp4',
+        },
+        {
+          index: 2,
+          type: 'video',
+          url: 'https://video.twimg.com/demo/second.mp4',
+        },
+      ],
+      'X @demo_user',
+      'note456',
+      tempDir,
+      {
+        noteDescription: '多视频帖子测试',
+      },
+    );
+
+    assert.equal(result.files.length, 2);
+    assert.deepEqual(
+      result.files.map((item) => item.fileName),
+      ['多视频帖子测试_01.mp4', '多视频帖子测试_02.mp4'],
+    );
+    assert.equal(new Set(result.files.map((item) => item.absolutePath)).size, 2);
+    assert.deepEqual(
+      (await readdir(result.outputDir)).sort(),
+      ['多视频帖子测试_01.mp4', '多视频帖子测试_02.mp4'],
+    );
   } finally {
     global.fetch = originalFetch;
   }

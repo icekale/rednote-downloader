@@ -528,11 +528,16 @@ function buildEntryFileName(note, item, index, options = {}) {
   }
 
   const batch = Boolean(options.batch);
+  const totalItems = Number.isFinite(options.totalItems) ? options.totalItems : 1;
   const stem = sanitizeStem(deriveNoteFileStem(note), 'rednote-media');
   const baseName = batch && note?.noteId ? `${stem}_${note.noteId}` : stem;
 
   if (item.type === 'video') {
-    return `${baseName}.${extension}`;
+    if (totalItems <= 1) {
+      return `${baseName}.${extension}`;
+    }
+
+    return `${baseName}_${String(index + 1).padStart(2, '0')}.${extension}`;
   }
 
   return `${baseName}_${String(index + 1).padStart(2, '0')}.${extension}`;
@@ -876,7 +881,11 @@ function buildResultSummary(results) {
 
 function renderNoteCard(result, batchMode = false) {
   const note = result.note;
-  const entries = (note.media || []).map((item, index) => createMediaEntry(note, item, index, { batch: batchMode }));
+  const totalItems = Array.isArray(note.media) ? note.media.length : 0;
+  const entries = (note.media || []).map((item, index) => createMediaEntry(note, item, index, {
+    batch: batchMode,
+    totalItems,
+  }));
   const card = document.createElement('article');
   card.className = 'subcard result-note';
 

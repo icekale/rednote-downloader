@@ -664,7 +664,15 @@ function inferExtension(url, contentType, fallback) {
   return fallback;
 }
 
-async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs) {
+function buildDownloadedMediaFileName(item, baseName, extension, sequenceNumber, totalItems) {
+  if (item.type === 'video' && totalItems <= 1) {
+    return `${baseName}.${extension}`;
+  }
+
+  return `${baseName}_${String(sequenceNumber).padStart(2, '0')}.${extension}`;
+}
+
+async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, sequenceNumber, totalItems) {
   const candidates = [
     item.url,
     ...(Array.isArray(item.fallbackUrls) ? item.fallbackUrls : []),
@@ -692,9 +700,7 @@ async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs) {
   const { url, response } = resolved;
 
   const extension = inferExtension(url.toString(), response.headers.get('content-type'), item.type === 'video' ? 'mp4' : 'jpg');
-  const fileName = item.type === 'video'
-    ? `${baseName}.${extension}`
-    : `${baseName}_${String(item.index).padStart(2, '0')}.${extension}`;
+  const fileName = buildDownloadedMediaFileName(item, baseName, extension, sequenceNumber, totalItems);
   const absolutePath = path.join(outputDir, fileName);
 
   try {
@@ -761,8 +767,12 @@ export async function downloadMedia(media, noteTitle, noteId, downloadDir, optio
   const baseName = fileStem;
   const results = [];
 
-  for (const item of media) {
-    results.push(await downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs));
+  for (const [itemIndex, item] of media.entries()) {
+    const explicitIndex = Number(item?.index);
+    const sequenceNumber = Number.isInteger(explicitIndex) && explicitIndex > 0
+      ? explicitIndex
+      : itemIndex + 1;
+    results.push(await downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, sequenceNumber, media.length));
   }
 
   return {
