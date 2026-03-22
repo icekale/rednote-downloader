@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import {
   buildFixTwitterApiUrl,
   deriveNoteFileStem,
@@ -21,6 +24,8 @@ import {
   parseTweetFromApiPayload,
   withWritablePathHint,
 } from '../src/xhs.js';
+
+const execFileAsync = promisify(execFile);
 
 test('extractFirstUrl pulls URL from share text', () => {
   const input = '23 小明发布了一篇小红书笔记，快来看吧！ 😆 http://xhslink.com/a/abc123 复制本条信息';
@@ -519,6 +524,61 @@ test('downloadMedia retries transient stream failures for the same media URL', a
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test('downloadMedia defaults to MEDIA_REQUEST_TIMEOUT_MS for server-side downloads', async () => {
+  const moduleUrl = pathToFileURL(path.join(process.cwd(), 'src', 'xhs.js')).href;
+  const script = `
+    import os from 'node:os';
+    import path from 'node:path';
+    import { mkdtemp } from 'node:fs/promises';
+
+    global.fetch = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return new Response(
+        new Uint8Array([1, 2, 3, 4]),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4',
+          },
+        },
+      );
+    };
+
+    const { downloadMedia } = await import(${JSON.stringify(moduleUrl)});
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-default-media-timeout-'));
+
+    await downloadMedia(
+      [
+        {
+          index: 1,
+          type: 'video',
+          url: 'https://video.twimg.com/demo/default-timeout.mp4',
+        },
+      ],
+      'X @demo_user',
+      'note-default-timeout',
+      tempDir,
+      {
+        noteDescription: '默认媒体超时测试',
+        retryCount: 0,
+      },
+    );
+  `;
+
+  await execFileAsync(
+    process.execPath,
+    ['--input-type=module', '-e', script],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        REQUEST_TIMEOUT_MS: '1',
+        MEDIA_REQUEST_TIMEOUT_MS: '100',
+      },
+    },
+  );
 });
 
 test('downloadMedia removes partial files when all retry attempts fail', async () => {

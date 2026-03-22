@@ -92,8 +92,29 @@ async function cleanupTempDirs(tempDirs) {
   );
 }
 
+function collectTelegramMediaCandidates(item) {
+  return [...new Set([
+    item?.url,
+    ...(Array.isArray(item?.fallbackUrls) ? item.fallbackUrls : []),
+  ].filter(Boolean))];
+}
+
+async function fetchTelegramUploadMedia(item) {
+  const errors = [];
+
+  for (const candidate of collectTelegramMediaCandidates(item)) {
+    try {
+      return await fetchMediaResponse(candidate);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  throw new Error(errors[0] || 'Failed to download media for Telegram upload');
+}
+
 async function materializeTelegramUpload(item, note, index) {
-  const { response } = await fetchMediaResponse(item.url);
+  const { response } = await fetchTelegramUploadMedia(item);
   const contentType = response.headers.get('content-type') || (item.type === 'video' ? 'video/mp4' : 'image/jpeg');
   const fileName = inferTelegramFileName(item, note, index);
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'rednote-telegram-'));
@@ -361,17 +382,6 @@ export class TelegramBotRunner {
 
   async pollOnce() {
     const updates = await this.fetchUpdates();
-    const nextOffset = updates.reduce(
-      (maxOffset, update) => Math.max(maxOffset, (update.update_id || 0) + 1),
-      this.offset,
-    );
-
-    if (nextOffset !== this.offset) {
-      this.offset = nextOffset;
-      if (this.onOffsetChange) {
-        await this.onOffsetChange(this.offset);
-      }
-    }
 
     for (const update of updates) {
       if (!this.running) {
@@ -380,6 +390,14 @@ export class TelegramBotRunner {
 
       if (update.message) {
         await this.handleMessage(update.message);
+      }
+
+      const nextOffset = Math.max(this.offset, (update.update_id || 0) + 1);
+      if (nextOffset !== this.offset) {
+        this.offset = nextOffset;
+        if (this.onOffsetChange) {
+          await this.onOffsetChange(this.offset);
+        }
       }
     }
   }

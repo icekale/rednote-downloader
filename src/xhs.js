@@ -756,7 +756,7 @@ export async function fetchMediaResponse(input, options = {}) {
 }
 
 export async function downloadMedia(media, noteTitle, noteId, downloadDir, options = {}) {
-  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_MEDIA_TIMEOUT_MS;
   const concurrency = normalizePositiveInt(options.concurrency, DEFAULT_DOWNLOAD_CONCURRENCY);
   const retryCount = Number.isInteger(options.retryCount) && options.retryCount >= 0
     ? options.retryCount

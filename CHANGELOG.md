@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.18 - 2026-03-22
+
+- Change Telegram polling to acknowledge updates after each message is processed, so a failed later reply no longer causes the rest of that batch to be skipped on restart.
+- Let Telegram uploads retry the media item's fallback URLs, matching the existing proxy and server-side download behavior when the preferred CDN link fails.
+- Make server-side downloads use the media-specific request timeout by default, so `/api/resolve` with `download=true` is no longer stricter than `/api/media` or Telegram uploads.
+
 ## v0.2.17 - 2026-03-21
 
 - Let the OpenClaw service base URL stay blank in saved config so the dashboard, diagnostics, and resolve payloads automatically follow the current request origin. This makes reverse proxies, alternate local ports, and temporary sidecar instances work without hand-editing the service URL.
