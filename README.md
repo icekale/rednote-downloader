@@ -1,6 +1,8 @@
 # RedNote Downloader Service
 
-一个 Docker-first 的自托管媒体工具，支持 RedNote / 小红书 和 `x.com` / `twitter.com`。它把帖子解析、浏览器预览、代理下载、Telegram 回传和 OpenClaw 接入放进同一个 Node 服务里，适合在本地或小型服务器上长期运行。
+[中文](README.md) | [English](README.en.md)
+
+一个面向 RedNote / 小红书 与 `x.com` / `twitter.com` 的 Docker-first 自托管媒体工具。它把帖子解析、浏览器预览、代理下载、Telegram 回传和 OpenClaw 接入放进同一个 Node 服务里，适合在本地、NAS 或小型服务器上长期运行。
 
 服务支持三种常见用法：
 
