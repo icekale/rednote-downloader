@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.2.19 - 2026-03-25
+
+- When Telegram rejects a media upload with `Request Entity Too Large`, fall back to sending direct download links instead of reporting the whole resolve as failed.
+
 ## v0.2.18 - 2026-03-22
 
 - Change Telegram polling to acknowledge updates after each message is processed, so a failed later reply no longer causes the rest of that batch to be skipped on restart.

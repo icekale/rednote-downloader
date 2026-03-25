@@ -40,6 +40,14 @@ function isAbortError(error) {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+function isTelegramEntityTooLargeError(error) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /request entity too large|entity too large|file is too big|payload too large|413/i.test(error.message);
+}
+
 export function buildTelegramCaption(note) {
   const lines = [
     note?.title || 'Untitled RedNote Note',
@@ -97,6 +105,22 @@ function collectTelegramMediaCandidates(item) {
     item?.url,
     ...(Array.isArray(item?.fallbackUrls) ? item.fallbackUrls : []),
   ].filter(Boolean))];
+}
+
+function buildTelegramOversizeFallbackText(item, note, index, caption) {
+  const links = collectTelegramMediaCandidates(item);
+  const fileName = inferTelegramFileName(item, note, index);
+  const lines = [];
+
+  if (caption) {
+    lines.push(caption, '');
+  }
+
+  lines.push('这个文件太大，Telegram 不能直接回传。请直接下载：');
+  lines.push(fileName);
+  lines.push(...links);
+
+  return lines.join('\n');
 }
 
 async function fetchTelegramUploadMedia(item) {
@@ -220,24 +244,46 @@ async function uploadMediaGroup(token, chatId, note, items, startIndex, options 
   }
 }
 
-async function sendResolvedMediaSequential(token, chatId, note, options = {}) {
-  const deliveryMode = options.deliveryMode || 'document';
-  const caption = buildTelegramCaption(note);
+async function sendTelegramOversizeFallback(token, chatId, item, note, index, options = {}) {
+  const text = buildTelegramOversizeFallbackText(item, note, index, options.caption);
+  await sendText(token, chatId, text, options.replyToMessageId);
+}
 
-  if (deliveryMode === 'preview') {
-    for (const [index, item] of note.media.entries()) {
+async function sendResolvedMediaItem(token, chatId, item, note, index, options = {}) {
+  const deliveryMode = options.deliveryMode || 'document';
+
+  try {
+    if (deliveryMode === 'preview') {
       const method = item.type === 'video' ? 'sendVideo' : 'sendPhoto';
       const fieldName = item.type === 'video' ? 'video' : 'photo';
       await uploadMediaAsTelegramFile(token, method, fieldName, chatId, item, note, index, {
         replyToMessageId: options.replyToMessageId,
-        caption: index === 0 ? caption : undefined,
+        caption: options.caption,
       });
+      return;
     }
-    return;
+
+    await uploadMediaAsTelegramFile(token, 'sendDocument', 'document', chatId, item, note, index, {
+      replyToMessageId: options.replyToMessageId,
+      caption: options.caption,
+    });
+  } catch (error) {
+    if (!isTelegramEntityTooLargeError(error)) {
+      throw error;
+    }
+
+    console.warn('[telegram] media upload exceeded Telegram size limit, sending fallback links:', error.message);
+    await sendTelegramOversizeFallback(token, chatId, item, note, index, options);
   }
+}
+
+async function sendResolvedMediaSequential(token, chatId, note, options = {}) {
+  const deliveryMode = options.deliveryMode || 'document';
+  const caption = buildTelegramCaption(note);
 
   for (const [index, item] of note.media.entries()) {
-    await uploadMediaAsTelegramFile(token, 'sendDocument', 'document', chatId, item, note, index, {
+    await sendResolvedMediaItem(token, chatId, item, note, index, {
+      deliveryMode,
       replyToMessageId: index === 0 ? options.replyToMessageId : undefined,
       caption: index === 0 ? caption : undefined,
     });
@@ -255,17 +301,8 @@ async function sendResolvedMedia(token, chatId, note, options = {}) {
 
   if (media.length === 1) {
     const [item] = media;
-    if ((options.deliveryMode || 'document') === 'preview') {
-      const method = item.type === 'video' ? 'sendVideo' : 'sendPhoto';
-      const fieldName = item.type === 'video' ? 'video' : 'photo';
-      await uploadMediaAsTelegramFile(token, method, fieldName, chatId, item, note, 0, {
-        replyToMessageId: options.replyToMessageId,
-        caption,
-      });
-      return;
-    }
-
-    await uploadMediaAsTelegramFile(token, 'sendDocument', 'document', chatId, item, note, 0, {
+    await sendResolvedMediaItem(token, chatId, item, note, 0, {
+      deliveryMode: options.deliveryMode,
       replyToMessageId: options.replyToMessageId,
       caption,
     });

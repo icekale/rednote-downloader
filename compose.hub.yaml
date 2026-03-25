@@ -1,6 +1,6 @@
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.18
+    image: icekale/rednote-downloader:v0.2.19
     container_name: rednote-downloader
     ports:
       - "3000:3000"

@@ -295,6 +295,110 @@ test('TelegramBotRunner uses fallback media URLs for Telegram uploads', async ()
   }
 });
 
+test('TelegramBotRunner falls back to download links when Telegram rejects an upload as too large', async () => {
+  const originalFetch = global.fetch;
+  const sendMessages = [];
+  let sendDocumentCount = 0;
+
+  global.fetch = async (url, options = {}) => {
+    const target = String(url);
+
+    if (target.includes('/sendChatAction')) {
+      return {
+        ok: true,
+        json: async () => ({ ok: true, result: {} }),
+      };
+    }
+
+    if (target.includes('api.fxtwitter.com/demo/status/2')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          tweet: {
+            id: '2',
+            url: 'https://x.com/demo/status/2',
+            text: '示例推文',
+            author: {
+              id: 'user-1',
+              name: 'Demo User',
+              screen_name: 'demo',
+            },
+            media: {
+              all: [
+                {
+                  type: 'video',
+                  url: 'https://video.twimg.com/demo/large.mp4',
+                  formats: [
+                    {
+                      url: 'https://video.twimg.com/demo/large.mp4',
+                      bitrate: 2000,
+                      container: 'mp4',
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        }),
+      };
+    }
+
+    if (target.includes('video.twimg.com/demo/large.mp4')) {
+      return new Response(
+        new Uint8Array([1, 2, 3, 4]),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4',
+          },
+        },
+      );
+    }
+
+    if (target.includes('/sendDocument')) {
+      sendDocumentCount += 1;
+      return {
+        ok: false,
+        status: 413,
+        json: async () => ({ ok: false, description: 'Request Entity Too Large' }),
+      };
+    }
+
+    if (target.includes('/sendMessage')) {
+      sendMessages.push(JSON.parse(options.body));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, result: {} }),
+      };
+    }
+
+    throw new Error(`Unexpected fetch: ${target}`);
+  };
+
+  try {
+    const runner = new TelegramBotRunner({
+      token: 'demo-token',
+      allowedChatIds: new Set(),
+      deliveryMode: 'document',
+    });
+
+    await runner.handleMessage({
+      chat: { id: 12345 },
+      text: 'https://x.com/demo/status/2',
+      message_id: 88,
+    });
+
+    assert.equal(sendDocumentCount, 1);
+    assert.equal(sendMessages.length, 1);
+    assert.match(sendMessages[0].text, /这个文件太大，Telegram 不能直接回传/);
+    assert.match(sendMessages[0].text, /https:\/\/video\.twimg\.com\/demo\/large\.mp4/);
+    assert.doesNotMatch(sendMessages[0].text, /解析失败：/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('TelegramBotRunner stop aborts an in-flight long poll', async () => {
   const originalFetch = global.fetch;
   let aborted = false;
