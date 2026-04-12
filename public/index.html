@@ -25,7 +25,7 @@
         <nav class="tabs topbar-tabs" aria-label="主功能标签" data-i18n-aria-label="tabs.aria">
           <button class="tab-button active" type="button" data-tab="resolve" data-i18n="tabs.resolve">解析下载</button>
           <button class="tab-button" type="button" data-tab="telegram">Telegram</button>
-          <button class="tab-button" type="button" data-tab="openclaw">OpenClaw</button>
+          <button class="tab-button" type="button" data-tab="integration" data-i18n="tabs.integration">Agent 接入</button>
           <button class="tab-button" type="button" data-tab="diagnostics" data-i18n="tabs.diagnostics">诊断</button>
         </nav>
       </div>
@@ -210,11 +210,11 @@
         </section>
       </section>
 
-      <section id="tab-openclaw" class="tab-panel">
+      <section id="tab-integration" class="tab-panel">
         <section class="card section-card">
             <div class="section-head">
               <div>
-                <p class="section-kicker">OpenClaw</p>
+                <p class="section-kicker">Integration</p>
                 <h2 data-i18n="openclaw.title">Agent 接入</h2>
               </div>
             <p class="section-note" data-i18n="openclaw.note">生成可直接复制的 `mcporter` 片段和 agent 提示词，用来把小红书或 X 的媒体直接回到 Telegram。</p>
@@ -228,6 +228,11 @@
                     <p class="section-kicker">Config</p>
                     <h3 data-i18n="openclaw.config.title">连接参数</h3>
                   </div>
+                </div>
+
+                <div class="integration-target-switcher" role="group" aria-label="Integration Target">
+                  <button id="integration-target-openclaw" class="target-switch-button active" type="button" data-integration-target="openclaw">OpenClaw</button>
+                  <button id="integration-target-hermes" class="target-switch-button" type="button" data-integration-target="hermes">Hermes</button>
                 </div>
 
                 <label class="field">
@@ -251,11 +256,11 @@
                 </label>
 
                 <div class="button-row openclaw-actions">
-                  <button id="save-openclaw-config-button" type="button" class="button button-primary" data-i18n="openclaw.save">保存 OpenClaw 配置</button>
-                  <button id="refresh-openclaw-template-button" type="button" class="button" data-i18n="openclaw.refresh">重新生成模板</button>
+                  <button id="save-integration-config-button" type="button" class="button button-primary" data-i18n="openclaw.save">保存 OpenClaw 配置</button>
+                  <button id="refresh-integration-template-button" type="button" class="button" data-i18n="openclaw.refresh">重新生成模板</button>
                 </div>
 
-                <p id="openclaw-status" class="status"></p>
+                <p id="integration-status" class="status"></p>
                 <p class="inline-tip" data-i18n="openclaw.tip">如果 rednote 跑在 Docker、OpenClaw 跑在宿主机，这里必须填宿主机真实路径，不能填容器内 `/app/...`。</p>
               </section>
 
@@ -268,25 +273,7 @@
                 </div>
 
                 <div class="template-stack">
-                  <div class="template-item">
-                    <label class="field">
-                      <span data-i18n="openclaw.templates.mcporter">mcporter 配置片段</span>
-                      <textarea id="mcporter-snippet" rows="8" readonly></textarea>
-                    </label>
-                    <div class="button-row template-actions">
-                      <button type="button" data-copy-target="mcporter-snippet" class="button" data-i18n="openclaw.templates.copyMcporter">复制 mcporter 配置</button>
-                    </div>
-                  </div>
-
-                  <div class="template-item">
-                    <label class="field">
-                      <span data-i18n="openclaw.templates.agentPrompt">Agent 提示词</span>
-                      <textarea id="agent-prompt" rows="7" readonly></textarea>
-                    </label>
-                    <div class="button-row template-actions">
-                      <button type="button" data-copy-target="agent-prompt" class="button" data-i18n="openclaw.templates.copyPrompt">复制 Agent 提示词</button>
-                    </div>
-                  </div>
+                  <div id="integration-template-slots"></div>
 
                   <div class="field">
                     <span data-i18n="openclaw.templates.configPath">服务端配置文件路径</span>
@@ -349,7 +336,7 @@
 
       <footer class="site-footer" aria-label="项目元信息" data-i18n-aria-label="footer.aria">
         <div class="site-footer-inner">
-          <span id="footer-version" class="footer-item">v0.2.19</span>
+          <span id="footer-version" class="footer-item">v0.2.20</span>
           <span class="footer-separator" aria-hidden="true"></span>
           <a
             class="footer-link"

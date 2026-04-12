@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.2.20 - 2026-04-12
+
+- Replace the OpenClaw-only setup surface with a unified Agent Integration dashboard that supports both OpenClaw and Hermes from the same UI.
+- Add shared integration config handling, Hermes template generation, richer diagnostics, and a browser target switcher that preserves unsaved drafts while regenerating snippets from the live form state.
+
 ## v0.2.19 - 2026-03-25
 
 - When Telegram rejects a media upload with `Request Entity Too Large`, fall back to sending direct download links instead of reporting the whole resolve as failed.

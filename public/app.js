@@ -1,5 +1,11 @@
 import { COOKIE_STORAGE_KEY, parseCookieText } from './cookie-utils.js';
 import { inferMediaFileName } from '/media-filenames.js';
+import {
+  INTEGRATION_TARGET_STORAGE_KEY,
+  INTEGRATION_TARGETS,
+  normalizeTemplateSlots,
+  resolveInitialIntegrationTarget,
+} from '/integration-utils.js';
 
 const form = document.querySelector('#resolve-form');
 const input = document.querySelector('#input');
@@ -33,11 +39,11 @@ const openclawServiceBaseUrl = document.querySelector('#openclaw-service-base-ur
 const openclawServerName = document.querySelector('#openclaw-server-name');
 const openclawAgentId = document.querySelector('#openclaw-agent-id');
 const openclawMcpScriptPath = document.querySelector('#openclaw-mcp-script-path');
-const saveOpenClawConfigButton = document.querySelector('#save-openclaw-config-button');
-const refreshOpenClawTemplateButton = document.querySelector('#refresh-openclaw-template-button');
-const openclawStatus = document.querySelector('#openclaw-status');
-const mcporterSnippet = document.querySelector('#mcporter-snippet');
-const agentPrompt = document.querySelector('#agent-prompt');
+const integrationTargetButtons = Array.from(document.querySelectorAll('[data-integration-target]'));
+const saveIntegrationConfigButton = document.querySelector('#save-integration-config-button');
+const refreshIntegrationTemplateButton = document.querySelector('#refresh-integration-template-button');
+const integrationStatus = document.querySelector('#integration-status');
+const integrationTemplateSlots = document.querySelector('#integration-template-slots');
 const configPathEl = document.querySelector('#config-path');
 const refreshDiagnosticsButton = document.querySelector('#refresh-diagnostics-button');
 const diagnosticsCardsEl = document.querySelector('#diagnostics-cards');
@@ -56,13 +62,26 @@ let latestNote = null;
 let latestDownload = null;
 let latestDiagnostics = null;
 let latestResults = [];
+let latestIntegrationTemplates = null;
+let currentIntegrationTarget = 'openclaw';
+let integrationConfigDraft = {
+  openclaw: {},
+  hermes: {},
+};
+let integrationDraftDirty = false;
 
 const UI_LANGUAGE_STORAGE_KEY = 'rednote-ui-language';
+const INTEGRATION_CONFIG_DEFAULTS = {
+  mcpServerName: 'rednote',
+  preferredAgentId: 'bfxia',
+  toolName: 'resolve_rednote_media',
+};
 const TRANSLATIONS = {
   zh: {
     'meta.title': 'RedNote Downloader',
     'tabs.aria': '主功能标签',
     'tabs.resolve': '解析下载',
+    'tabs.integration': 'Agent 接入',
     'tabs.diagnostics': '诊断',
     'resolve.title': '帖子解析与下载',
     'resolve.input.label': '分享链接或文案',
@@ -102,12 +121,12 @@ const TRANSLATIONS = {
     'telegram.refresh': '刷新状态',
     'telegram.tip': '提示：document 更适合保留原始文件质量，preview 更适合直接在 Telegram 内预览。',
     'openclaw.title': 'Agent 接入',
-    'openclaw.note': '生成可直接复制的 mcporter 片段和 agent 提示词，用来把小红书或 X 的媒体直接回到 Telegram。',
+    'openclaw.note': '生成可直接复制的 OpenClaw / Hermes 片段和 agent 提示词，用来把小红书或 X 的媒体直接回到 Telegram。',
     'openclaw.config.title': '连接参数',
     'openclaw.config.serviceBaseAuto': '留空时自动使用当前访问地址',
     'openclaw.config.scriptPath': '宿主机 MCP 脚本路径',
     'openclaw.config.scriptPathPlaceholder': '/Users/you/.../rednote/src/mcp-server.js',
-    'openclaw.save': '保存 OpenClaw 配置',
+    'openclaw.save': '保存集成配置',
     'openclaw.refresh': '重新生成模板',
     'openclaw.tip': '如果 rednote 跑在 Docker、OpenClaw 跑在宿主机，这里必须填宿主机真实路径，不能填容器内 /app/...。',
     'openclaw.templates.title': '复制片段',
@@ -115,6 +134,7 @@ const TRANSLATIONS = {
     'openclaw.templates.copyMcporter': '复制 mcporter 配置',
     'openclaw.templates.agentPrompt': 'Agent 提示词',
     'openclaw.templates.copyPrompt': '复制 Agent 提示词',
+    'openclaw.templates.copySnippet': '复制片段',
     'openclaw.templates.configPath': '服务端配置文件路径',
     'diagnostics.title': '联调状态面板',
     'diagnostics.note': '把 rednote 服务、Telegram 运行态和 OpenClaw 接线情况放到一页里，排障时不用来回翻。',
@@ -192,21 +212,23 @@ const TRANSLATIONS = {
     'telegram.status.saveFailed': '保存 Telegram 配置失败',
     'telegram.status.refreshed': '运行状态已刷新。',
     'telegram.status.refreshFailed': '刷新失败',
-    'openclaw.status.saving': '正在保存 OpenClaw 配置...',
-    'openclaw.status.saved': 'OpenClaw 配置已保存。',
-    'openclaw.status.saveFailed': '保存 OpenClaw 配置失败',
-    'openclaw.status.templateFailed': '生成 OpenClaw 模板失败',
+    'openclaw.status.saving': '正在保存集成配置...',
+    'openclaw.status.saved': '集成配置已保存。',
+    'openclaw.status.saveFailed': '保存集成配置失败',
+    'openclaw.status.templateFailed': '生成集成模板失败',
     'openclaw.status.templateReady': 'MCP server：{serverName} · 推荐 agent：{agentId}',
     'openclaw.status.diagnosticsRefreshed': '诊断信息已刷新。',
     'openclaw.status.diagnosticsFailed': '诊断刷新失败',
     'copy.mcporter': '已复制 mcporter 配置。',
     'copy.agentPrompt': '已复制 Agent 提示词。',
+    'copy.template': '已复制模板片段。',
     'copy.diagnostics': '已复制诊断 JSON。',
   },
   en: {
     'meta.title': 'RedNote Downloader',
     'tabs.aria': 'Primary tabs',
     'tabs.resolve': 'Resolve',
+    'tabs.integration': 'Agent Integration',
     'tabs.diagnostics': 'Diagnostics',
     'resolve.title': 'Resolve And Download',
     'resolve.input.label': 'Share URL or text',
@@ -246,12 +268,12 @@ const TRANSLATIONS = {
     'telegram.refresh': 'Refresh Status',
     'telegram.tip': 'Tip: document is better for preserving original file quality, while preview is better for inline Telegram viewing.',
     'openclaw.title': 'Agent Integration',
-    'openclaw.note': 'Generate copy-ready mcporter snippets and agent prompts so RedNote or X media can be sent back to Telegram.',
+    'openclaw.note': 'Generate copy-ready OpenClaw / Hermes snippets and agent prompts so RedNote or X media can be sent back to Telegram.',
     'openclaw.config.title': 'Connection Settings',
     'openclaw.config.serviceBaseAuto': 'leave blank to use the current origin',
     'openclaw.config.scriptPath': 'Host MCP Script Path',
     'openclaw.config.scriptPathPlaceholder': '/Users/you/.../rednote/src/mcp-server.js',
-    'openclaw.save': 'Save OpenClaw Config',
+    'openclaw.save': 'Save Integration Config',
     'openclaw.refresh': 'Regenerate Template',
     'openclaw.tip': 'If rednote runs in Docker and OpenClaw runs on the host, this must be the real host path, not an in-container /app/... path.',
     'openclaw.templates.title': 'Copy Snippets',
@@ -259,6 +281,7 @@ const TRANSLATIONS = {
     'openclaw.templates.copyMcporter': 'Copy mcporter Config',
     'openclaw.templates.agentPrompt': 'Agent Prompt',
     'openclaw.templates.copyPrompt': 'Copy Agent Prompt',
+    'openclaw.templates.copySnippet': 'Copy Snippet',
     'openclaw.templates.configPath': 'Server Config File Path',
     'diagnostics.title': 'Diagnostics Dashboard',
     'diagnostics.note': 'Put the rednote service, Telegram runtime, and OpenClaw wiring on one page so debugging does not require tab hopping.',
@@ -336,15 +359,16 @@ const TRANSLATIONS = {
     'telegram.status.saveFailed': 'Failed to save Telegram config',
     'telegram.status.refreshed': 'Runtime status refreshed.',
     'telegram.status.refreshFailed': 'Failed to refresh status',
-    'openclaw.status.saving': 'Saving OpenClaw config...',
-    'openclaw.status.saved': 'OpenClaw config saved.',
-    'openclaw.status.saveFailed': 'Failed to save OpenClaw config',
-    'openclaw.status.templateFailed': 'Failed to generate the OpenClaw template',
+    'openclaw.status.saving': 'Saving integration config...',
+    'openclaw.status.saved': 'Integration config saved.',
+    'openclaw.status.saveFailed': 'Failed to save integration config',
+    'openclaw.status.templateFailed': 'Failed to generate the integration template',
     'openclaw.status.templateReady': 'MCP server: {serverName} · Recommended agent: {agentId}',
     'openclaw.status.diagnosticsRefreshed': 'Diagnostics refreshed.',
     'openclaw.status.diagnosticsFailed': 'Failed to refresh diagnostics',
     'copy.mcporter': 'Copied the mcporter config.',
     'copy.agentPrompt': 'Copied the agent prompt.',
+    'copy.template': 'Copied the template snippet.',
     'copy.diagnostics': 'Copied the diagnostics JSON.',
   },
 };
@@ -416,7 +440,7 @@ function setLanguage(lang, { persist = true, reloadRemote = true } = {}) {
   if (reloadRemote) {
     void loadDashboard().catch((error) => {
       setTelegramStatus(error instanceof Error ? error.message : t('error.initConfigFailed'), 'error');
-      setOpenClawStatus(error instanceof Error ? error.message : t('error.initConfigFailed'), 'error');
+      setIntegrationStatus(error instanceof Error ? error.message : t('error.initConfigFailed'), 'error');
     });
   }
 }
@@ -469,8 +493,119 @@ function setTelegramStatus(message, tone = '') {
   setMessage(telegramConfigStatus, message, tone);
 }
 
-function setOpenClawStatus(message, tone = '') {
-  setMessage(openclawStatus, message, tone);
+function setIntegrationStatus(message, tone = '') {
+  setMessage(integrationStatus, message, tone);
+}
+
+function normalizeIntegrationConfig(config = {}, fallbacks = {}) {
+  return {
+    serviceBaseUrl: String(config.serviceBaseUrl || ''),
+    mcpServerName: String(config.mcpServerName || fallbacks.mcpServerName || ''),
+    preferredAgentId: String(config.preferredAgentId || fallbacks.preferredAgentId || ''),
+    mcpScriptPath: String(config.mcpScriptPath || ''),
+    toolName: String(config.toolName || fallbacks.toolName || ''),
+  };
+}
+
+function setIntegrationDraftFromConfig(config = {}) {
+  integrationConfigDraft = {
+    openclaw: normalizeIntegrationConfig(config.openclaw, INTEGRATION_CONFIG_DEFAULTS),
+    hermes: normalizeIntegrationConfig(config.hermes, INTEGRATION_CONFIG_DEFAULTS),
+  };
+  integrationDraftDirty = false;
+}
+
+function syncFormIntoCurrentTargetDraft({ markDirty = true } = {}) {
+  integrationConfigDraft[currentIntegrationTarget] = {
+    ...integrationConfigDraft[currentIntegrationTarget],
+    serviceBaseUrl: openclawServiceBaseUrl.value.trim(),
+    mcpServerName: openclawServerName.value.trim() || integrationConfigDraft[currentIntegrationTarget].mcpServerName || 'rednote',
+    preferredAgentId: openclawAgentId.value.trim() || integrationConfigDraft[currentIntegrationTarget].preferredAgentId || 'bfxia',
+    mcpScriptPath: openclawMcpScriptPath.value.trim(),
+  };
+
+  if (markDirty) {
+    integrationDraftDirty = true;
+  }
+}
+
+function applyTargetDraftToForm(target) {
+  const targetConfig = integrationConfigDraft[target] || {};
+
+  openclawServiceBaseUrl.value = targetConfig.serviceBaseUrl || '';
+  openclawServiceBaseUrl.placeholder = `${window.location.origin} (${t('openclaw.config.serviceBaseAuto')})`;
+  openclawServerName.value = targetConfig.mcpServerName || 'rednote';
+  openclawAgentId.value = targetConfig.preferredAgentId || 'bfxia';
+  openclawMcpScriptPath.value = targetConfig.mcpScriptPath || '';
+}
+
+function getIntegrationTargets() {
+  return latestIntegrationTemplates?.targets || latestIntegrationTemplates || {};
+}
+
+function getCurrentTargetPayload() {
+  return getIntegrationTargets()[currentIntegrationTarget] || {};
+}
+
+function getCurrentTemplateMeta() {
+  return getCurrentTargetPayload().template || {};
+}
+
+function buildIntegrationConfigPayload() {
+  return {
+    openclaw: buildIntegrationPatchFromDraft(integrationConfigDraft.openclaw, INTEGRATION_CONFIG_DEFAULTS),
+    hermes: buildIntegrationPatchFromDraft(integrationConfigDraft.hermes, INTEGRATION_CONFIG_DEFAULTS),
+  };
+}
+
+function renderIntegrationTemplate() {
+  if (!integrationTemplateSlots) {
+    return;
+  }
+
+  const targetPayload = getCurrentTargetPayload();
+  const slots = normalizeTemplateSlots(targetPayload);
+  clearChildren(integrationTemplateSlots);
+
+  for (const slot of slots) {
+    const slotId = `${currentIntegrationTarget}-${slot.key}-snippet`;
+    const item = document.createElement('div');
+    item.className = 'template-item';
+    item.innerHTML = `
+      <label class="field">
+        <span>${escapeHtml(slot.label || slot.key)}</span>
+        <textarea id="${escapeHtml(slotId)}" rows="7" readonly></textarea>
+      </label>
+      <div class="button-row template-actions">
+        <button type="button" data-copy-target="${escapeHtml(slotId)}" class="button">${escapeHtml(slot.copyLabel || t('openclaw.templates.copySnippet'))}</button>
+      </div>
+    `;
+    integrationTemplateSlots.appendChild(item);
+    const textarea = item.querySelector('textarea');
+    if (textarea) {
+      textarea.value = slot.value;
+    }
+    const copyButton = item.querySelector('[data-copy-target]');
+    if (copyButton) {
+      copyButton.addEventListener('click', copyTextFromTarget);
+    }
+  }
+}
+
+function setIntegrationTarget(target, { persist = true } = {}) {
+  const normalized = INTEGRATION_TARGETS.includes(target) ? target : 'openclaw';
+  currentIntegrationTarget = normalized;
+
+  if (persist) {
+    window.localStorage.setItem(INTEGRATION_TARGET_STORAGE_KEY, normalized);
+  }
+
+  integrationTargetButtons.forEach((button) => {
+    button.classList.toggle('active', button.dataset.integrationTarget === normalized);
+  });
+
+  applyTargetDraftToForm(normalized);
+  renderIntegrationTemplate();
 }
 
 function clearChildren(node) {
@@ -1141,7 +1276,7 @@ function onDragLeave() {
   cookieDropzone.classList.remove('dragover');
 }
 
-function applyConfigToForm(config, telegram) {
+function applyConfigToForm(config, telegram, { preserveIntegrationDraft = true } = {}) {
   telegramEnabled.checked = config.telegram.enabled;
   telegramAllowedChatIds.value = config.telegram.allowedChatIds || '';
   telegramDeliveryMode.value = telegram.deliveryMode || config.telegram.deliveryMode || 'document';
@@ -1151,11 +1286,18 @@ function applyConfigToForm(config, telegram) {
   telegramBotToken.value = '';
   telegramClearToken.checked = false;
 
-  openclawServiceBaseUrl.value = config.openclaw.serviceBaseUrl || '';
-  openclawServiceBaseUrl.placeholder = `${window.location.origin} (${t('openclaw.config.serviceBaseAuto')})`;
-  openclawServerName.value = config.openclaw.mcpServerName || 'rednote';
-  openclawAgentId.value = config.openclaw.preferredAgentId || 'bfxia';
-  openclawMcpScriptPath.value = config.openclaw.mcpScriptPath || '';
+  if (preserveIntegrationDraft && integrationDraftDirty) {
+    applyTargetDraftToForm(currentIntegrationTarget);
+    return;
+  }
+
+  setIntegrationDraftFromConfig(config);
+
+  const initialTarget = resolveInitialIntegrationTarget({
+    storageValue: window.localStorage.getItem(INTEGRATION_TARGET_STORAGE_KEY),
+    config,
+  });
+  setIntegrationTarget(initialTarget, { persist: false });
 }
 
 async function loadDiagnostics() {
@@ -1167,16 +1309,16 @@ async function loadDiagnostics() {
   diagnosticsJsonEl.value = JSON.stringify(data.diagnostics, null, 2);
 }
 
-async function loadDashboard() {
+async function loadDashboard(options = {}) {
   const [configData, telegramData] = await Promise.all([
     fetchJson('/api/config'),
     fetchJson('/api/telegram/status'),
   ]);
 
   configPathEl.textContent = configData.configPath;
-  applyConfigToForm(configData.config, telegramData.telegram);
+  applyConfigToForm(configData.config, telegramData.telegram, options);
   await Promise.all([
-    refreshOpenClawTemplate(),
+    refreshIntegrationTemplate(),
     loadDiagnostics(),
   ]);
 }
@@ -1192,7 +1334,7 @@ async function loadFooterMeta() {
       footerVersionEl.textContent = `v${data.version}`;
     }
   } catch {
-    footerVersionEl.textContent = footerVersionEl.textContent || 'v0.2.19';
+    footerVersionEl.textContent = footerVersionEl.textContent || 'v0.2.20';
   }
 }
 
@@ -1223,7 +1365,7 @@ async function saveTelegramConfig() {
       body: JSON.stringify(patch),
     });
 
-    await loadDashboard();
+    await loadDashboard({ preserveIntegrationDraft: true });
     setTelegramStatus(t('telegram.status.saved'), 'success');
   } catch (error) {
     setTelegramStatus(error instanceof Error ? error.message : t('telegram.status.saveFailed'), 'error');
@@ -1232,9 +1374,20 @@ async function saveTelegramConfig() {
   }
 }
 
-async function saveOpenClawConfig() {
-  setOpenClawStatus(t('openclaw.status.saving'));
-  saveOpenClawConfigButton.disabled = true;
+function buildIntegrationPatchFromDraft(targetConfig, defaults) {
+  return {
+    serviceBaseUrl: String(targetConfig.serviceBaseUrl || '').trim(),
+    mcpServerName: String(targetConfig.mcpServerName || '').trim() || defaults.mcpServerName,
+    preferredAgentId: String(targetConfig.preferredAgentId || '').trim() || defaults.preferredAgentId,
+    mcpScriptPath: String(targetConfig.mcpScriptPath || '').trim(),
+    toolName: String(targetConfig.toolName || '').trim() || defaults.toolName,
+  };
+}
+
+async function saveIntegrationConfig() {
+  setIntegrationStatus(t('openclaw.status.saving'));
+  saveIntegrationConfigButton.disabled = true;
+  syncFormIntoCurrentTargetDraft();
 
   try {
     await fetchJson('/api/config', {
@@ -1242,42 +1395,43 @@ async function saveOpenClawConfig() {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        openclaw: {
-          serviceBaseUrl: openclawServiceBaseUrl.value.trim(),
-          mcpServerName: openclawServerName.value.trim() || 'rednote',
-          preferredAgentId: openclawAgentId.value.trim() || 'bfxia',
-          mcpScriptPath: openclawMcpScriptPath.value.trim(),
-        },
-      }),
+      body: JSON.stringify(buildIntegrationConfigPayload()),
     });
 
-    await loadDashboard();
-    setOpenClawStatus(t('openclaw.status.saved'), 'success');
+    await loadDashboard({ preserveIntegrationDraft: false });
+    setIntegrationStatus(t('openclaw.status.saved'), 'success');
   } catch (error) {
-    setOpenClawStatus(error instanceof Error ? error.message : t('openclaw.status.saveFailed'), 'error');
+    setIntegrationStatus(error instanceof Error ? error.message : t('openclaw.status.saveFailed'), 'error');
   } finally {
-    saveOpenClawConfigButton.disabled = false;
+    saveIntegrationConfigButton.disabled = false;
   }
 }
 
-async function refreshOpenClawTemplate() {
+async function refreshIntegrationTemplate() {
   try {
-    const data = await fetchJson('/api/openclaw/template');
-    mcporterSnippet.value = data.openclaw.mcporterSnippet;
-    agentPrompt.value = data.openclaw.agentPrompt;
-    setOpenClawStatus(t('openclaw.status.templateReady', {
-      serverName: data.openclaw.serverName,
-      agentId: data.openclaw.preferredAgentId,
+    syncFormIntoCurrentTargetDraft({ markDirty: false });
+    const data = await fetchJson('/api/integration/template', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(buildIntegrationConfigPayload()),
+    });
+    latestIntegrationTemplates = data.integration;
+    renderIntegrationTemplate();
+    const template = getCurrentTemplateMeta();
+    setIntegrationStatus(t('openclaw.status.templateReady', {
+      serverName: template.serverName || 'rednote',
+      agentId: template.preferredAgentId || 'bfxia',
     }));
   } catch (error) {
-    setOpenClawStatus(error instanceof Error ? error.message : t('openclaw.status.templateFailed'), 'error');
+    setIntegrationStatus(error instanceof Error ? error.message : t('openclaw.status.templateFailed'), 'error');
   }
 }
 
 async function refreshRuntime() {
   try {
-    await loadDashboard();
+    await loadDashboard({ preserveIntegrationDraft: true });
     setTelegramStatus(t('telegram.status.refreshed'), 'success');
   } catch (error) {
     setTelegramStatus(error instanceof Error ? error.message : t('telegram.status.refreshFailed'), 'error');
@@ -1289,9 +1443,9 @@ async function refreshDiagnostics() {
 
   try {
     await loadDiagnostics();
-    setOpenClawStatus(t('openclaw.status.diagnosticsRefreshed'), 'success');
+    setIntegrationStatus(t('openclaw.status.diagnosticsRefreshed'), 'success');
   } catch (error) {
-    setOpenClawStatus(error instanceof Error ? error.message : t('openclaw.status.diagnosticsFailed'), 'error');
+    setIntegrationStatus(error instanceof Error ? error.message : t('openclaw.status.diagnosticsFailed'), 'error');
   } finally {
     refreshDiagnosticsButton.disabled = false;
   }
@@ -1306,14 +1460,10 @@ async function copyTextFromTarget(event) {
 
   try {
     await navigator.clipboard.writeText(target.value || target.textContent || '');
-    const key = targetId === 'mcporter-snippet'
-      ? 'copy.mcporter'
-      : targetId === 'diagnostics-json'
-        ? 'copy.diagnostics'
-        : 'copy.agentPrompt';
-    setOpenClawStatus(t(key), 'success');
+    const key = targetId === 'diagnostics-json' ? 'copy.diagnostics' : 'copy.template';
+    setIntegrationStatus(t(key), 'success');
   } catch (error) {
-    setOpenClawStatus(error instanceof Error ? error.message : t('error.copyFailed'), 'error');
+    setIntegrationStatus(error instanceof Error ? error.message : t('error.copyFailed'), 'error');
   }
 }
 
@@ -1335,8 +1485,22 @@ cookieDropzone.addEventListener('drop', onDrop);
 saveTelegramConfigButton.addEventListener('click', saveTelegramConfig);
 refreshRuntimeButton.addEventListener('click', refreshRuntime);
 refreshDiagnosticsButton.addEventListener('click', refreshDiagnostics);
-saveOpenClawConfigButton.addEventListener('click', saveOpenClawConfig);
-refreshOpenClawTemplateButton.addEventListener('click', refreshOpenClawTemplate);
+saveIntegrationConfigButton.addEventListener('click', saveIntegrationConfig);
+refreshIntegrationTemplateButton.addEventListener('click', refreshIntegrationTemplate);
+[
+  openclawServiceBaseUrl,
+  openclawServerName,
+  openclawAgentId,
+  openclawMcpScriptPath,
+].forEach((element) => {
+  element.addEventListener('input', () => syncFormIntoCurrentTargetDraft());
+});
+integrationTargetButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    syncFormIntoCurrentTargetDraft({ markDirty: false });
+    setIntegrationTarget(button.dataset.integrationTarget || 'openclaw');
+  });
+});
 tabButtons.forEach((button) => {
   button.addEventListener('click', () => switchTab(button.dataset.tab));
 });
@@ -1352,5 +1516,5 @@ loadSavedCookie();
 void loadFooterMeta();
 loadDashboard().catch((error) => {
   setTelegramStatus(error instanceof Error ? error.message : t('error.initConfigFailed'), 'error');
-  setOpenClawStatus(error instanceof Error ? error.message : t('error.initConfigFailed'), 'error');
+  setIntegrationStatus(error instanceof Error ? error.message : t('error.initConfigFailed'), 'error');
 });

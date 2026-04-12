@@ -576,6 +576,40 @@ select:focus {
   align-items: center;
 }
 
+.integration-target-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  padding: 4px;
+  border: 1px solid rgba(10, 37, 64, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.target-switch-button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.target-switch-button:hover {
+  color: var(--text);
+  background: rgba(99, 91, 255, 0.08);
+}
+
+.target-switch-button.active {
+  color: var(--primary-strong);
+  background: linear-gradient(135deg, rgba(99, 91, 255, 0.2), rgba(99, 91, 255, 0.08));
+  box-shadow: inset 0 0 0 1px rgba(99, 91, 255, 0.14);
+}
+
 .telegram-grid {
   align-items: start;
 }
@@ -599,6 +633,11 @@ select:focus {
 }
 
 .template-stack {
+  display: grid;
+  gap: 18px;
+}
+
+#integration-template-slots {
   display: grid;
   gap: 18px;
 }

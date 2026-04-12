@@ -4,6 +4,13 @@ import { access, copyFile, mkdir, readFile, readdir, rename, writeFile } from 'n
 const DEFAULT_OPENCLAW_SERVICE_BASE_URL = '';
 const DEFAULT_MCP_SERVER_NAME = 'rednote';
 const DEFAULT_OPENCLAW_TOOL_NAME = 'resolve_rednote_media';
+const DEFAULT_AGENT_CONFIG = {
+  serviceBaseUrl: DEFAULT_OPENCLAW_SERVICE_BASE_URL,
+  mcpServerName: DEFAULT_MCP_SERVER_NAME,
+  toolName: DEFAULT_OPENCLAW_TOOL_NAME,
+  preferredAgentId: 'bfxia',
+  mcpScriptPath: '',
+};
 
 export const DEFAULT_APP_CONFIG = {
   telegram: {
@@ -12,13 +19,8 @@ export const DEFAULT_APP_CONFIG = {
     allowedChatIds: '',
     deliveryMode: 'document',
   },
-  openclaw: {
-    serviceBaseUrl: DEFAULT_OPENCLAW_SERVICE_BASE_URL,
-    mcpServerName: DEFAULT_MCP_SERVER_NAME,
-    toolName: DEFAULT_OPENCLAW_TOOL_NAME,
-    preferredAgentId: 'bfxia',
-    mcpScriptPath: '',
-  },
+  openclaw: { ...DEFAULT_AGENT_CONFIG },
+  hermes: { ...DEFAULT_AGENT_CONFIG },
 };
 
 export const DEFAULT_APP_STATE = {
@@ -101,9 +103,25 @@ export function normalizeServiceBaseUrl(value, fallback = DEFAULT_OPENCLAW_SERVI
   }
 }
 
+function normalizeAgentConfig(value = {}, fallback = DEFAULT_AGENT_CONFIG) {
+  const config = typeof value === 'object' && value ? value : {};
+
+  return {
+    serviceBaseUrl: normalizeServiceBaseUrl(config.serviceBaseUrl, fallback.serviceBaseUrl),
+    mcpServerName: normalizeString(config.mcpServerName, fallback.mcpServerName) || fallback.mcpServerName,
+    toolName: normalizeString(config.toolName, fallback.toolName) || fallback.toolName,
+    preferredAgentId: normalizeString(config.preferredAgentId, fallback.preferredAgentId),
+    mcpScriptPath: normalizeString(config.mcpScriptPath, fallback.mcpScriptPath),
+  };
+}
+
 export function sanitizeAppConfig(input = {}) {
   const telegram = input?.telegram || {};
   const openclaw = input?.openclaw || {};
+  const hermes = input?.hermes || {};
+
+  const normalizedOpenclaw = normalizeAgentConfig(openclaw, DEFAULT_APP_CONFIG.openclaw);
+  const normalizedHermes = normalizeAgentConfig(hermes, normalizedOpenclaw);
 
   return {
     telegram: {
@@ -112,13 +130,8 @@ export function sanitizeAppConfig(input = {}) {
       allowedChatIds: normalizeString(telegram.allowedChatIds, DEFAULT_APP_CONFIG.telegram.allowedChatIds),
       deliveryMode: normalizeDeliveryMode(telegram.deliveryMode || DEFAULT_APP_CONFIG.telegram.deliveryMode),
     },
-    openclaw: {
-      serviceBaseUrl: normalizeServiceBaseUrl(openclaw.serviceBaseUrl, DEFAULT_APP_CONFIG.openclaw.serviceBaseUrl),
-      mcpServerName: normalizeString(openclaw.mcpServerName, DEFAULT_APP_CONFIG.openclaw.mcpServerName) || DEFAULT_MCP_SERVER_NAME,
-      toolName: normalizeString(openclaw.toolName, DEFAULT_APP_CONFIG.openclaw.toolName) || DEFAULT_OPENCLAW_TOOL_NAME,
-      preferredAgentId: normalizeString(openclaw.preferredAgentId, DEFAULT_APP_CONFIG.openclaw.preferredAgentId),
-      mcpScriptPath: normalizeString(openclaw.mcpScriptPath, DEFAULT_APP_CONFIG.openclaw.mcpScriptPath),
-    },
+    openclaw: normalizedOpenclaw,
+    hermes: normalizedHermes,
   };
 }
 
@@ -132,6 +145,10 @@ export function mergeAppConfig(current, patch = {}) {
     openclaw: {
       ...base.openclaw,
       ...(patch.openclaw || {}),
+    },
+    hermes: {
+      ...base.hermes,
+      ...(patch.hermes || {}),
     },
   };
 
@@ -341,5 +358,6 @@ export function getPublicConfig(config) {
       deliveryMode: normalized.telegram.deliveryMode,
     },
     openclaw: normalized.openclaw,
+    hermes: normalized.hermes,
   };
 }

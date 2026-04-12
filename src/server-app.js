@@ -1,5 +1,6 @@
 import http from 'node:http';
 import path from 'node:path';
+import { constants as fsConstants } from 'node:fs';
 import { Readable } from 'node:stream';
 import { access, mkdir, readFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
@@ -22,7 +23,7 @@ import {
   saveAppConfig,
   saveAppState,
 } from './config.js';
-import { buildOpenClawResolvePayload, buildOpenClawTemplate } from './openclaw.js';
+import { buildIntegrationTemplates, buildOpenClawResolvePayload, buildOpenClawTemplate } from './openclaw.js';
 
 const DEFAULT_ADMIN_HEADER_NAME = 'X-Admin-Token';
 const ADMIN_PATHS = new Set([
@@ -30,12 +31,14 @@ const ADMIN_PATHS = new Set([
   '/api/telegram/status',
   '/api/diagnostics',
   '/api/openclaw/template',
+  '/api/integration/template',
 ]);
 
 const DEFAULT_STATIC_ROUTES = new Map([
   ['/', 'index.html'],
   ['/app.js', 'app.js'],
   ['/cookie-utils.js', 'cookie-utils.js'],
+  ['/integration-utils.js', path.join(process.cwd(), 'src', 'shared', 'agent-integration.js')],
   ['/icon.svg', 'icon.svg'],
   ['/media-filenames.js', path.join(process.cwd(), 'src', 'shared', 'media-filenames.js')],
   ['/styles.css', 'styles.css'],
@@ -144,6 +147,33 @@ async function pathExists(targetPath) {
   } catch {
     return false;
   }
+}
+
+async function probeCliAvailable(binaryName, env = process.env) {
+  const name = typeof binaryName === 'string' ? binaryName.trim() : '';
+  const pathValue = typeof env?.PATH === 'string' ? env.PATH : '';
+  if (!name || !pathValue) {
+    return false;
+  }
+
+  const dirs = pathValue.split(path.delimiter).map((value) => value.trim()).filter(Boolean);
+  const suffixes = process.platform === 'win32'
+    ? ['.exe', '.cmd', '.bat', '']
+    : [''];
+
+  for (const dir of dirs) {
+    for (const suffix of suffixes) {
+      const candidate = path.join(dir, `${name}${suffix}`);
+      try {
+        await access(candidate, fsConstants.X_OK);
+        return true;
+      } catch {
+        // keep searching
+      }
+    }
+  }
+
+  return false;
 }
 
 async function probeJsonEndpoint(url) {
@@ -361,7 +391,14 @@ export async function createRednoteApp(options = {}) {
       return true;
     }
 
-    return request.headers['x-admin-token'] === settings.adminToken;
+    const headerName = String(settings.adminHeaderName || DEFAULT_ADMIN_HEADER_NAME).toLowerCase();
+    const provided = request.headers[headerName];
+
+    if (Array.isArray(provided)) {
+      return provided.includes(settings.adminToken);
+    }
+
+    return provided === settings.adminToken;
   }
 
   function sendAdminUnauthorized(request, response) {
@@ -608,25 +645,51 @@ export async function createRednoteApp(options = {}) {
     });
   }
 
+  function getIntegrationTargetPayload(templates, target) {
+    return templates?.targets?.[target] || templates?.[target] || {};
+  }
+
+  function buildIntegrationTemplatePayload(configSource, origin) {
+    const config = getPublicConfig(configSource);
+    const openclawServiceBaseUrl = normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl, origin);
+    const hermesServiceBaseUrl = normalizeServiceBaseUrl(config.hermes.serviceBaseUrl, origin);
+
+    return buildIntegrationTemplates({
+      nodeCommand: 'node',
+      openclaw: {
+        serviceBaseUrl: openclawServiceBaseUrl,
+        serverName: config.openclaw.mcpServerName,
+        toolName: config.openclaw.toolName,
+        preferredAgentId: config.openclaw.preferredAgentId,
+        mcpScriptPath: config.openclaw.mcpScriptPath || path.join(process.cwd(), 'src', 'mcp-server.js'),
+      },
+      hermes: {
+        serviceBaseUrl: hermesServiceBaseUrl,
+        serverName: config.hermes.mcpServerName,
+        toolName: config.hermes.toolName,
+        preferredAgentId: config.hermes.preferredAgentId,
+        mcpScriptPath: config.hermes.mcpScriptPath || path.join(process.cwd(), 'src', 'mcp-server.js'),
+      },
+    });
+  }
+
   async function handleDiagnostics(request, response) {
     const config = getPublicConfig(appConfig);
     const origin = getRequestOrigin(request, settings.port);
     const url = new URL(request.url, origin);
     const language = normalizeUiLanguage(url.searchParams.get('lang'));
-    const serviceBaseUrl = normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl, origin);
-    const template = buildOpenClawTemplate({
-      serviceBaseUrl,
-      serverName: config.openclaw.mcpServerName,
-      toolName: config.openclaw.toolName,
-      preferredAgentId: config.openclaw.preferredAgentId,
-      mcpScriptPath: config.openclaw.mcpScriptPath || path.join(process.cwd(), 'src', 'mcp-server.js'),
-      nodeCommand: 'node',
-    });
+    const openclawServiceBaseUrl = normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl, origin);
+    const hermesServiceBaseUrl = normalizeServiceBaseUrl(config.hermes.serviceBaseUrl, origin);
+    const templates = buildIntegrationTemplatePayload(appConfig, origin);
+    const openclawTemplate = getIntegrationTargetPayload(templates, 'openclaw').template;
+    const hermesTemplate = getIntegrationTargetPayload(templates, 'hermes').template;
 
-    const [serviceHealth, configuredServiceBase, mcpScriptExists] = await Promise.all([
+    const [serviceHealth, configuredServiceBase, openclawMcpScriptExists, hermesMcpScriptExists, hermesCliAvailable] = await Promise.all([
       probeJsonEndpoint(`${origin}/healthz`),
-      probeJsonEndpoint(`${serviceBaseUrl}/healthz`),
-      pathExists(template.mcpScriptPath),
+      probeJsonEndpoint(`${openclawServiceBaseUrl}/healthz`),
+      pathExists(openclawTemplate.mcpScriptPath),
+      pathExists(hermesTemplate.mcpScriptPath),
+      probeCliAvailable('hermes', settings.env),
     ]);
 
     const diagnostics = {
@@ -647,12 +710,21 @@ export async function createRednoteApp(options = {}) {
         deliveryMode: telegramRuntimeConfig?.deliveryMode || config.telegram.deliveryMode,
       },
       openclaw: {
-        serviceBaseUrl,
-        serverName: template.serverName,
-        toolName: template.toolName,
-        preferredAgentId: template.preferredAgentId,
-        mcpScriptPath: template.mcpScriptPath,
-        mcpScriptExists,
+        serviceBaseUrl: openclawServiceBaseUrl,
+        serverName: openclawTemplate.serverName,
+        toolName: openclawTemplate.toolName,
+        preferredAgentId: openclawTemplate.preferredAgentId,
+        mcpScriptPath: openclawTemplate.mcpScriptPath,
+        mcpScriptExists: openclawMcpScriptExists,
+      },
+      hermes: {
+        serviceBaseUrl: hermesServiceBaseUrl,
+        serverName: hermesTemplate.serverName,
+        toolName: hermesTemplate.toolName,
+        preferredAgentId: hermesTemplate.preferredAgentId,
+        mcpScriptPath: hermesTemplate.mcpScriptPath,
+        mcpScriptExists: hermesMcpScriptExists,
+        cliAvailable: hermesCliAvailable,
       },
       checks: {
         serviceHealth,
@@ -682,6 +754,18 @@ export async function createRednoteApp(options = {}) {
     sendJson(request, response, 200, {
       ok: true,
       openclaw: template,
+    });
+  }
+
+  async function handleIntegrationTemplate(request, response) {
+    const origin = getRequestOrigin(request, settings.port);
+    const body = request.method === 'POST' ? await readJsonBody(request) : null;
+    const configSource = body ? mergeAppConfig(appConfig, body) : appConfig;
+    const templates = buildIntegrationTemplatePayload(configSource, origin);
+
+    sendJson(request, response, 200, {
+      ok: true,
+      integration: templates,
     });
   }
 
@@ -768,6 +852,11 @@ export async function createRednoteApp(options = {}) {
 
       if (request.method === 'GET' && url.pathname === '/api/openclaw/template') {
         await handleOpenClawTemplate(request, response);
+        return;
+      }
+
+      if ((request.method === 'GET' || request.method === 'POST') && url.pathname === '/api/integration/template') {
+        await handleIntegrationTemplate(request, response);
         return;
       }
 
