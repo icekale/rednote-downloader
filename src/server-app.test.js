@@ -86,6 +86,23 @@ test('GET /api/diagnostics includes external Douyin downloader status', async (t
   assert.equal(typeof data.diagnostics.checks.douyinDownloaderHealth.ok, 'boolean');
 });
 
+test('GET /api/diagnostics treats bundled Douyin downloader mode as configured', async (t) => {
+  const { origin } = await startTestApp(t, {
+    env: {
+      DOWNLOAD_DIR: '/data/downloads',
+      DOUYIN_INTERNAL_DOWNLOADER_ENABLED: 'true',
+    },
+  });
+
+  const response = await fetch(`${origin}/api/diagnostics`);
+  assert.equal(response.status, 200);
+  const data = await response.json();
+
+  assert.equal(data.ok, true);
+  assert.equal(data.diagnostics.douyin.externalConfigured, true);
+  assert.equal(data.diagnostics.douyin.baseUrl, 'http://127.0.0.1:8000');
+});
+
 test('POST /api/resolve returns the existing response shape for a Douyin single video', async (t) => {
   const { origin } = await startTestApp(t, {
     dependencies: {

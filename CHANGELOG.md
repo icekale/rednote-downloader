@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.2.23 - 2026-05-10
+
+- Bundle `jiji262/douyin-downloader` REST mode into the Docker image for one-container Douyin server-side downloads.
+- Start the internal Douyin downloader on `127.0.0.1:8000` by default and route Douyin server downloads to `/data/downloads/douyin`.
+- Add `DOUYIN_INTERNAL_DOWNLOADER_ENABLED` and `DOUYIN_INTERNAL_DOWNLOADER_PORT` for Unraid/Docker deployments while preserving external downloader override support.
+- Update Docker Hub, compose, and Unraid documentation for persistent `DOUYIN_COOKIE` usage without baking cookies into the image.
+
 ## v0.2.22 - 2026-05-10
 
 - Add a dedicated `DOUYIN_COOKIE` environment variable for Unraid/Docker deployments.

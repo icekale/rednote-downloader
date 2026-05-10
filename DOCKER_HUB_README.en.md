@@ -9,7 +9,7 @@ RedNote Downloader is a self-hosted media resolver for RedNote / Xiaohongshu, X 
 - Download through a local proxy to reduce hotlink and CORS issues.
 - Optionally save files into a mounted directory.
 - Optionally configure a Telegram bot for media delivery.
-- Optionally connect to the REST mode of `jiji262/douyin-downloader` for Douyin server-side downloads.
+- Bundles the REST mode of `jiji262/douyin-downloader` for one-container Douyin server-side downloads.
 - Agent / OpenClaw / MCP integration has been removed.
 
 ## Quick Start
@@ -22,7 +22,7 @@ docker run -d \
   -e PUID="$(id -u)" \
   -e PGID="$(id -g)" \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.22
+  icekale/rednote-downloader:v0.2.23
 ```
 
 Then open:
@@ -38,8 +38,10 @@ http://127.0.0.1:3000/
 - `APP_STATE_PATH`: Telegram polling state path, default `/data/config/.rednote-state.json`
 - `XHS_COOKIE`: optional Cookie header for protected RedNote posts
 - `DOUYIN_COOKIE`: optional Cookie header for protected Douyin single-video resolving or external Douyin downloads
-- `DOUYIN_DOWNLOADER_BASE_URL`: optional external Douyin downloader REST URL
-- `DOUYIN_DOWNLOADER_OUTPUT_DIR`: optional external Douyin downloader output directory
+- `DOUYIN_INTERNAL_DOWNLOADER_ENABLED`: optional; defaults to `true` and starts the bundled Douyin downloader
+- `DOUYIN_INTERNAL_DOWNLOADER_PORT`: optional bundled downloader port inside the container, default `8000`
+- `DOUYIN_DOWNLOADER_BASE_URL`: optional external Douyin downloader REST URL; bundled mode defaults to `http://127.0.0.1:8000`
+- `DOUYIN_DOWNLOADER_OUTPUT_DIR`: optional downloader output directory; bundled mode defaults to `/data/downloads/douyin`
 - `TELEGRAM_ENABLED`: optional; set to `false` / `0` to disable Telegram polling
 - `TELEGRAM_BOT_TOKEN`: optional Telegram bot token
 - `TELEGRAM_ALLOWED_CHAT_IDS`: optional chat id allowlist
@@ -52,4 +54,5 @@ http://127.0.0.1:3000/
 - "No watermark" means the service prefers no-watermark or low-watermark sources returned by the platform. It does not perform image-level watermark removal.
 - No transcoding, recompression, or watermarking is applied.
 - Cookies are not baked into the image. Pass them at runtime through the UI or environment. Use `XHS_COOKIE` for Xiaohongshu and `DOUYIN_COOKIE` for Douyin.
+- On Unraid, set `DOUYIN_COOKIE` in the Docker template for persistent Douyin authentication. Downloaded Douyin files are saved under `/data/downloads/douyin`, which maps to your configured appdata path.
 - A Telegram bot token can only be long-polled by one running instance at a time.

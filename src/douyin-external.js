@@ -7,10 +7,14 @@ const DEFAULT_EXTERNAL_DOUYIN_POLL_INTERVAL_MS = 1500;
 const TERMINAL_STATUSES = new Set(['success', 'failed']);
 
 export function buildExternalDouyinConfig(env = process.env) {
-  const baseUrl = normalizeBaseUrl(env.DOUYIN_DOWNLOADER_BASE_URL);
+  const internalEnabled = normalizeBoolean(env.DOUYIN_INTERNAL_DOWNLOADER_ENABLED, false);
+  const downloadDir = normalizePath(env.DOWNLOAD_DIR) || '/data/downloads';
+  const baseUrl = normalizeBaseUrl(env.DOUYIN_DOWNLOADER_BASE_URL)
+    || (internalEnabled ? 'http://127.0.0.1:8000' : '');
   return {
     baseUrl,
-    outputDir: normalizePath(env.DOUYIN_DOWNLOADER_OUTPUT_DIR),
+    outputDir: normalizePath(env.DOUYIN_DOWNLOADER_OUTPUT_DIR)
+      || (internalEnabled ? path.join(downloadDir, 'douyin') : ''),
     timeoutMs: normalizePositiveInt(
       env.DOUYIN_DOWNLOADER_TIMEOUT_MS,
       DEFAULT_EXTERNAL_DOUYIN_TIMEOUT_MS,
@@ -20,6 +24,31 @@ export function buildExternalDouyinConfig(env = process.env) {
       DEFAULT_EXTERNAL_DOUYIN_POLL_INTERVAL_MS,
     ),
   };
+}
+
+function normalizeBoolean(value, fallback = false) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
 }
 
 export function isExternalDouyinConfigured(config = buildExternalDouyinConfig()) {

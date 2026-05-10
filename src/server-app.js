@@ -214,14 +214,14 @@ function buildDiagnosticsHints(context, language = 'zh') {
   if (!context.douyin.externalConfigured) {
     hints.push(
       isEnglish
-        ? 'Douyin server-side downloads can use jiji262/douyin-downloader directly. Set DOUYIN_DOWNLOADER_BASE_URL to its REST service when you want to bypass the built-in Douyin detail parser.'
-        : '抖音服务端下载可以直接复用 jiji262/douyin-downloader。需要绕过内置抖音详情解析时，设置 DOUYIN_DOWNLOADER_BASE_URL 指向它的 REST 服务。',
+        ? 'Douyin server-side downloads can use the bundled or external jiji262/douyin-downloader REST service. In Docker, keep DOUYIN_INTERNAL_DOWNLOADER_ENABLED=true or set DOUYIN_DOWNLOADER_BASE_URL manually.'
+        : '抖音服务端下载可以复用镜像内置或外部 jiji262/douyin-downloader REST 服务。Docker 中保持 DOUYIN_INTERNAL_DOWNLOADER_ENABLED=true，或手动设置 DOUYIN_DOWNLOADER_BASE_URL。',
     );
   } else if (!context.checks.douyinDownloaderHealth.ok) {
     hints.push(
       isEnglish
-        ? 'DOUYIN_DOWNLOADER_BASE_URL is configured, but its /api/v1/health check failed. Start the upstream service with `python run.py --serve --serve-port 8000`.'
-        : '已配置 DOUYIN_DOWNLOADER_BASE_URL，但它的 /api/v1/health 检查失败。请用 `python run.py --serve --serve-port 8000` 启动上游服务。',
+        ? 'The Douyin downloader REST health check failed. If using Docker bundled mode, check container logs for the internal downloader; if using external mode, start it with `python run.py --serve --serve-port 8000`.'
+        : '抖音下载器 REST 健康检查失败。如果使用 Docker 内置模式，请查看容器日志；如果使用外部模式，请用 `python run.py --serve --serve-port 8000` 启动外部服务。',
     );
   }
 
@@ -747,8 +747,9 @@ export async function createRednoteApp(options = {}) {
     const douyinDownloader = buildExternalDouyinConfig(settings.env);
     const douyinDownloaderConfigured = isExternalDouyinConfigured(douyinDownloader);
 
+    const serviceHealthUrl = `http://127.0.0.1:${settings.port}/healthz`;
     const [serviceHealth, douyinDownloaderHealth] = await Promise.all([
-      probeJsonEndpoint(`${origin}/healthz`),
+      probeJsonEndpoint(serviceHealthUrl),
       douyinDownloaderConfigured
         ? probeJsonEndpoint(`${douyinDownloader.baseUrl}/api/v1/health`)
         : Promise.resolve({

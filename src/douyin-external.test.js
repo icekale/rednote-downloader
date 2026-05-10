@@ -31,6 +31,38 @@ test('builds external Douyin downloader config from environment', () => {
   assert.equal(config.timeoutMs, 5000);
 });
 
+test('builds internal Douyin downloader defaults when bundled mode is enabled', () => {
+  const config = buildExternalDouyinConfig({
+    DOWNLOAD_DIR: '/data/downloads',
+    DOUYIN_INTERNAL_DOWNLOADER_ENABLED: 'true',
+  });
+
+  assert.equal(config.baseUrl, 'http://127.0.0.1:8000');
+  assert.equal(config.outputDir, '/data/downloads/douyin');
+});
+
+test('does not configure bundled Douyin downloader when disabled', () => {
+  const config = buildExternalDouyinConfig({
+    DOWNLOAD_DIR: '/data/downloads',
+    DOUYIN_INTERNAL_DOWNLOADER_ENABLED: 'false',
+  });
+
+  assert.equal(config.baseUrl, '');
+  assert.equal(config.outputDir, '');
+});
+
+test('prefers explicit external Douyin downloader settings over bundled defaults', () => {
+  const config = buildExternalDouyinConfig({
+    DOWNLOAD_DIR: '/data/downloads',
+    DOUYIN_INTERNAL_DOWNLOADER_ENABLED: 'true',
+    DOUYIN_DOWNLOADER_BASE_URL: 'http://192.168.1.10:8000',
+    DOUYIN_DOWNLOADER_OUTPUT_DIR: '/mnt/douyin',
+  });
+
+  assert.equal(config.baseUrl, 'http://192.168.1.10:8000');
+  assert.equal(config.outputDir, '/mnt/douyin');
+});
+
 test('reads the latest downloaded Douyin media from manifest', async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'douyin-manifest-test-'));
   try {

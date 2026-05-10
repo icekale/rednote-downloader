@@ -20,7 +20,7 @@
 - “去水印”定义为优先选择平台返回的无水印或低水印视频源；如果只能拿到疑似带水印候选，会返回 warning 并仍允许下载。
 - 服务不会对媒体做转码、压缩、裁剪或 OpenCV/ffmpeg 水印擦除。
 - 如果目标站点返回验证码、风控页，或者没有暴露可用媒体地址，服务会直接报错。
-- 抖音服务端下载可选接入 `jiji262/douyin-downloader` 的 REST 服务；Cookie 不会写入镜像。
+- Docker 镜像默认内置 `jiji262/douyin-downloader` REST 服务，用于抖音服务端下载；Cookie 不会写入镜像。
 
 ## API
 
@@ -124,19 +124,47 @@ Unraid 示例：
 REDNOTE_DATA_DIR=/mnt/user/appdata/rednote docker compose -f compose.unraid.yaml up -d
 ```
 
-## 抖音外部下载器
+## 抖音内置下载器
 
-如果只做解析预览，可以直接使用本服务内置抖音单视频解析。若希望服务端下载尽量复用 `jiji262/douyin-downloader`，先启动它的 REST 服务，再给本服务配置：
+Docker 镜像默认把 `jiji262/douyin-downloader` 打包在同一个容器里，并在容器内监听 `127.0.0.1:8000`。服务端下载抖音时会优先走这个内置 REST 下载器，输出目录默认是：
+
+```text
+/data/downloads/douyin
+```
+
+如果在 Unraid 部署，宿主机默认对应：
+
+```text
+/mnt/user/appdata/rednote/downloads/douyin
+```
+
+Cookie 有两种写入方式：
+
+- 在 Web UI 的“抖音 Cookie”输入框填写，只对当前请求生效。
+- 在 Unraid Docker 模板或 compose `.env` 里设置 `DOUYIN_COOKIE=...`，长期保存并作为默认抖音 Cookie。
+
+不要把抖音 Cookie 写进镜像，也不要和 `XHS_COOKIE` 混用；`XHS_COOKIE` 只用于小红书，`DOUYIN_COOKIE` 只用于抖音。
+
+如果不想启动内置下载器，可以设置：
 
 ```bash
-DOUYIN_DOWNLOADER_BASE_URL=http://127.0.0.1:8000
+DOUYIN_INTERNAL_DOWNLOADER_ENABLED=false
+```
+
+如果希望改用一个独立的外部 `jiji262/douyin-downloader` REST 服务，设置：
+
+```bash
+DOUYIN_INTERNAL_DOWNLOADER_ENABLED=false
+DOUYIN_DOWNLOADER_BASE_URL=http://host.docker.internal:8000
 DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
 ```
 
 对应环境变量：
 
-- `DOUYIN_DOWNLOADER_BASE_URL`: 外部抖音下载器 REST 地址。
-- `DOUYIN_DOWNLOADER_OUTPUT_DIR`: 外部下载器输出目录，用于代理本地下载结果。
+- `DOUYIN_INTERNAL_DOWNLOADER_ENABLED`: 是否启动镜像内置抖音下载器，默认 `true`。
+- `DOUYIN_INTERNAL_DOWNLOADER_PORT`: 内置抖音下载器监听端口，默认 `8000`，只绑定容器内 `127.0.0.1`。
+- `DOUYIN_DOWNLOADER_BASE_URL`: 外部抖音下载器 REST 地址；不设置时，内置模式默认使用 `http://127.0.0.1:8000`。
+- `DOUYIN_DOWNLOADER_OUTPUT_DIR`: 抖音下载器输出目录，用于代理本地下载结果；内置模式默认 `/data/downloads/douyin`。
 - `DOUYIN_DOWNLOADER_TIMEOUT_MS`: 可选，等待外部下载任务超时，默认 10 分钟。
 - `DOUYIN_DOWNLOADER_POLL_INTERVAL_MS`: 可选，轮询外部任务间隔，默认 1500ms。
 
@@ -172,6 +200,10 @@ Telegram 轮询状态路径：
 - `PUID` / `PGID`: 仅 compose 示例使用，控制容器写入挂载目录的 uid/gid。
 - `XHS_COOKIE`: 可选，受限小红书页面可尝试带 Cookie。
 - `DOUYIN_COOKIE`: 可选，受限抖音单视频解析或外部下载器可尝试带 Cookie。Unraid 模板里建议单独填写，不要和小红书 Cookie 混在一起。
+- `DOUYIN_INTERNAL_DOWNLOADER_ENABLED`: 可选，Docker 默认 `true`，设为 `false` / `0` / `no` / `off` 可关闭镜像内置抖音下载器。
+- `DOUYIN_INTERNAL_DOWNLOADER_PORT`: 可选，内置抖音下载器容器内端口，默认 `8000`。
+- `DOUYIN_DOWNLOADER_BASE_URL`: 可选，外部抖音下载器 REST 地址；留空时内置模式自动使用 `http://127.0.0.1:8000`。
+- `DOUYIN_DOWNLOADER_OUTPUT_DIR`: 可选，抖音下载器输出目录；留空时内置模式自动使用 `/data/downloads/douyin`。
 - `XHS_USER_AGENT`: 可选，覆盖默认浏览器 UA。
 - `REQUEST_TIMEOUT_MS`: 可选，普通请求超时，默认 `15000`。
 - `BATCH_RESOLVE_CONCURRENCY`: 可选，批量解析并发数，默认 `3`。

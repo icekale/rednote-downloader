@@ -20,7 +20,7 @@ A Docker-first self-hosted media resolver for RedNote/Xiaohongshu, `x.com` / `tw
 - "No watermark" means the service prefers no-watermark or low-watermark sources returned by the platform. If only a suspicious candidate is available, the service returns a warning and still allows download.
 - The service does not transcode, recompress, crop, or remove watermarks with ffmpeg/OpenCV.
 - If a target site returns an anti-bot page, captcha, or no usable media URL, the service fails fast.
-- Server-side Douyin downloads can optionally use the REST mode of `jiji262/douyin-downloader`. Cookies are not baked into the image.
+- Docker images bundle the REST mode of `jiji262/douyin-downloader` for server-side Douyin downloads. Cookies are not baked into the image.
 
 ## Quick Start
 
@@ -41,12 +41,38 @@ Docker Hub:
 docker compose -f compose.hub.yaml up -d
 ```
 
-## External Douyin Downloader
+## Bundled Douyin Downloader
 
-For preview-only workflows, the built-in Douyin single-video resolver can be used directly. For server-side downloading through `jiji262/douyin-downloader`, run its REST service and configure:
+Docker images start a bundled `jiji262/douyin-downloader` REST service inside the same container on `127.0.0.1:8000`. Douyin server-side downloads use it by default. Its default output directory is:
+
+```text
+/data/downloads/douyin
+```
+
+On Unraid with the sample compose file, this maps to:
+
+```text
+/mnt/user/appdata/rednote/downloads/douyin
+```
+
+Cookie input options:
+
+- Use the web UI "Douyin Cookie" field for the current request.
+- Set `DOUYIN_COOKIE=...` in your Unraid Docker template or compose `.env` for a persistent default.
+
+Do not bake cookies into the image. Do not mix `XHS_COOKIE` and `DOUYIN_COOKIE`; they are platform-specific.
+
+To disable the bundled downloader:
 
 ```bash
-DOUYIN_DOWNLOADER_BASE_URL=http://127.0.0.1:8000
+DOUYIN_INTERNAL_DOWNLOADER_ENABLED=false
+```
+
+To use a separate external `jiji262/douyin-downloader` REST service instead:
+
+```bash
+DOUYIN_INTERNAL_DOWNLOADER_ENABLED=false
+DOUYIN_DOWNLOADER_BASE_URL=http://host.docker.internal:8000
 DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
 ```
 
@@ -62,8 +88,10 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
 - `XHS_COOKIE`: optional manual Cookie header for protected RedNote posts.
 - `DOUYIN_COOKIE`: optional manual Cookie header for protected Douyin single-video resolving or external Douyin downloads.
 - `XHS_USER_AGENT`: optional custom request user agent.
-- `DOUYIN_DOWNLOADER_BASE_URL`: optional external Douyin downloader REST URL.
-- `DOUYIN_DOWNLOADER_OUTPUT_DIR`: optional external downloader output directory.
+- `DOUYIN_INTERNAL_DOWNLOADER_ENABLED`: optional; Docker default is `true`. Set to `false` / `0` / `no` / `off` to disable the bundled Douyin downloader.
+- `DOUYIN_INTERNAL_DOWNLOADER_PORT`: optional bundled downloader port inside the container, default `8000`.
+- `DOUYIN_DOWNLOADER_BASE_URL`: optional external Douyin downloader REST URL; in bundled mode it defaults to `http://127.0.0.1:8000`.
+- `DOUYIN_DOWNLOADER_OUTPUT_DIR`: optional downloader output directory; in bundled mode it defaults to `/data/downloads/douyin`.
 - `DOUYIN_DOWNLOADER_TIMEOUT_MS`: optional external job timeout, default 10 minutes.
 - `DOUYIN_DOWNLOADER_POLL_INTERVAL_MS`: optional external job poll interval, default 1500ms.
 - `TELEGRAM_ENABLED`: optional; set to `false` / `0` to disable the Telegram polling bot.

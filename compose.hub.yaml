@@ -1,6 +1,6 @@
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.22
+    image: icekale/rednote-downloader:v0.2.23
     container_name: rednote-downloader
     ports:
       - "3000:3000"
@@ -15,6 +15,8 @@ services:
       XHS_COOKIE: ${XHS_COOKIE:-}
       XHS_USER_AGENT: ${XHS_USER_AGENT:-}
       DOUYIN_COOKIE: ${DOUYIN_COOKIE:-}
+      DOUYIN_INTERNAL_DOWNLOADER_ENABLED: ${DOUYIN_INTERNAL_DOWNLOADER_ENABLED:-true}
+      DOUYIN_INTERNAL_DOWNLOADER_PORT: ${DOUYIN_INTERNAL_DOWNLOADER_PORT:-8000}
       DOUYIN_DOWNLOADER_BASE_URL: ${DOUYIN_DOWNLOADER_BASE_URL:-}
       DOUYIN_DOWNLOADER_OUTPUT_DIR: ${DOUYIN_DOWNLOADER_OUTPUT_DIR:-}
       DOUYIN_DOWNLOADER_TIMEOUT_MS: ${DOUYIN_DOWNLOADER_TIMEOUT_MS:-600000}

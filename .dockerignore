@@ -3,3 +3,14 @@ npm-debug.log
 data
 .git
 .DS_Store
+vendor/douyin-downloader/.git
+vendor/douyin-downloader/.github
+vendor/douyin-downloader/.venv
+vendor/douyin-downloader/.pytest_cache
+vendor/douyin-downloader/__pycache__
+vendor/douyin-downloader/**/__pycache__
+vendor/douyin-downloader/Downloaded
+vendor/douyin-downloader/.cookies.json
+vendor/douyin-downloader/config.yml
+vendor/douyin-downloader/config.rednote.yml
+vendor/douyin-downloader/*.db
