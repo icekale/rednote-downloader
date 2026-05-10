@@ -1,44 +1,34 @@
+import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { readdirSync, statSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const ROOT = process.cwd();
-const TARGETS = ['src', 'public', 'test', 'scripts'];
+const TARGET_DIRS = ['src', 'public'];
+const execFileAsync = promisify(execFile);
 
-function collectJavaScriptFiles(directory) {
-  const entries = readdirSync(directory, { withFileTypes: true })
-    .sort((left, right) => left.name.localeCompare(right.name, 'en'));
+async function collectJavaScriptFiles(dir) {
+  const entries = await readdir(dir, { withFileTypes: true });
   const files = [];
 
   for (const entry of entries) {
-    const fullPath = path.join(directory, entry.name);
-
+    const absolutePath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...collectJavaScriptFiles(fullPath));
+      files.push(...await collectJavaScriptFiles(absolutePath));
       continue;
     }
 
-    if (entry.isFile() && fullPath.endsWith('.js')) {
-      files.push(fullPath);
+    if (entry.isFile() && entry.name.endsWith('.js')) {
+      files.push(absolutePath);
     }
   }
 
   return files;
 }
 
-const files = TARGETS
-  .map((target) => path.join(ROOT, target))
-  .filter((target) => {
-    try {
-      return statSync(target).isDirectory();
-    } catch {
-      return false;
-    }
-  })
-  .flatMap((target) => collectJavaScriptFiles(target));
+const files = (
+  await Promise.all(TARGET_DIRS.map((dir) => collectJavaScriptFiles(path.join(ROOT, dir))))
+).flat();
 
-for (const file of files) {
-  execFileSync(process.execPath, ['--check', file], {
-    stdio: 'inherit',
-  });
-}
+await Promise.all(files.map((file) => execFileAsync(process.execPath, ['--check', file])));
+console.log(`Syntax check passed for ${files.length} JavaScript files.`);

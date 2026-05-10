@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.2.21 - 2026-05-10
+
+- Add Douyin single-video resolve/download support for share text, short links, and `douyin.com/video/{aweme_id}` inputs.
+- Add optional external `jiji262/douyin-downloader` REST integration for Douyin server-side downloads without baking cookies into the image.
+- Remove the Agent / OpenClaw / MCP integration UI, routes, config blocks, and server scripts.
+- Update Docker/Unraid compose examples and Docker Hub docs for the simplified web + Telegram workflow.
+
 ## v0.2.20 - 2026-04-12
 
 - Replace the OpenClaw-only setup surface with a unified Agent Integration dashboard that supports both OpenClaw and Hermes from the same UI.

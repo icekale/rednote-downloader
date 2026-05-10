@@ -25,7 +25,6 @@
         <nav class="tabs topbar-tabs" aria-label="主功能标签" data-i18n-aria-label="tabs.aria">
           <button class="tab-button active" type="button" data-tab="resolve" data-i18n="tabs.resolve">解析下载</button>
           <button class="tab-button" type="button" data-tab="telegram">Telegram</button>
-          <button class="tab-button" type="button" data-tab="integration" data-i18n="tabs.integration">Agent 接入</button>
           <button class="tab-button" type="button" data-tab="diagnostics" data-i18n="tabs.diagnostics">诊断</button>
         </nav>
       </div>
@@ -48,7 +47,7 @@
                 id="input"
                 name="input"
                 rows="5"
-                placeholder="把小红书分享文案、x.com 链接，或 twitter.com 链接贴在这里&#10;支持批量输入：一行一条链接。"
+                placeholder="把小红书分享文案、x.com/twitter.com 链接，或抖音单视频链接贴在这里&#10;支持批量输入：一行一条链接。"
                 data-i18n-placeholder="resolve.input.placeholder"
                 required
               ></textarea>
@@ -68,7 +67,7 @@
                     <input id="server-download" name="serverDownload" type="checkbox">
                     <span data-i18n="actions.serverDownload">同时下载到服务端目录</span>
                   </label>
-                  <p class="action-setting-note" data-i18n="actions.serverDownloadNote">公开帖子通常直接可下。只有碰到受限帖、解析失败或风控页时，再展开下面的 Cookie 选项。</p>
+                  <p class="action-setting-note" data-i18n="actions.serverDownloadNote">公开视频通常直接可下。只有碰到受限帖、解析失败或风控页时，再展开下面的 Cookie 选项。</p>
                 </div>
 
                 <div class="button-row action-buttons">
@@ -210,82 +209,6 @@
         </section>
       </section>
 
-      <section id="tab-integration" class="tab-panel">
-        <section class="card section-card">
-            <div class="section-head">
-              <div>
-                <p class="section-kicker">Integration</p>
-                <h2 data-i18n="openclaw.title">Agent 接入</h2>
-              </div>
-            <p class="section-note" data-i18n="openclaw.note">生成可直接复制的 `mcporter` 片段和 agent 提示词，用来把小红书或 X 的媒体直接回到 Telegram。</p>
-          </div>
-
-          <div class="stack">
-            <div class="section-grid">
-              <section class="subcard">
-                <div class="section-head compact">
-                  <div>
-                    <p class="section-kicker">Config</p>
-                    <h3 data-i18n="openclaw.config.title">连接参数</h3>
-                  </div>
-                </div>
-
-                <div class="integration-target-switcher" role="group" aria-label="Integration Target">
-                  <button id="integration-target-openclaw" class="target-switch-button active" type="button" data-integration-target="openclaw">OpenClaw</button>
-                  <button id="integration-target-hermes" class="target-switch-button" type="button" data-integration-target="hermes">Hermes</button>
-                </div>
-
-                <label class="field">
-                  <span>Service Base URL</span>
-                  <input id="openclaw-service-base-url" type="text" placeholder="留空时自动使用当前访问地址">
-                </label>
-
-                <label class="field">
-                  <span>MCP Server Name</span>
-                  <input id="openclaw-server-name" type="text" placeholder="rednote">
-                </label>
-
-                <label class="field">
-                  <span>Preferred Agent ID</span>
-                  <input id="openclaw-agent-id" type="text" placeholder="bfxia">
-                </label>
-
-                <label class="field">
-                  <span data-i18n="openclaw.config.scriptPath">宿主机 MCP 脚本路径</span>
-                  <input id="openclaw-mcp-script-path" type="text" placeholder="/Users/you/.../rednote/src/mcp-server.js" data-i18n-placeholder="openclaw.config.scriptPathPlaceholder">
-                </label>
-
-                <div class="button-row openclaw-actions">
-                  <button id="save-integration-config-button" type="button" class="button button-primary" data-i18n="openclaw.save">保存 OpenClaw 配置</button>
-                  <button id="refresh-integration-template-button" type="button" class="button" data-i18n="openclaw.refresh">重新生成模板</button>
-                </div>
-
-                <p id="integration-status" class="status"></p>
-                <p class="inline-tip" data-i18n="openclaw.tip">如果 rednote 跑在 Docker、OpenClaw 跑在宿主机，这里必须填宿主机真实路径，不能填容器内 `/app/...`。</p>
-              </section>
-
-              <section class="subcard templates-panel">
-                <div class="section-head compact">
-                  <div>
-                    <p class="section-kicker">Templates</p>
-                    <h3 data-i18n="openclaw.templates.title">复制片段</h3>
-                  </div>
-                </div>
-
-                <div class="template-stack">
-                  <div id="integration-template-slots"></div>
-
-                  <div class="field">
-                    <span data-i18n="openclaw.templates.configPath">服务端配置文件路径</span>
-                    <code id="config-path" class="code-block"></code>
-                  </div>
-                </div>
-              </section>
-            </div>
-          </div>
-        </section>
-      </section>
-
       <section id="tab-diagnostics" class="tab-panel">
         <section class="card section-card">
             <div class="section-head">
@@ -293,7 +216,7 @@
                 <p class="section-kicker">Diagnostics</p>
                 <h2 data-i18n="diagnostics.title">联调状态面板</h2>
               </div>
-            <p class="section-note" data-i18n="diagnostics.note">把 rednote 服务、Telegram 运行态和 OpenClaw 接线情况放到一页里，排障时不用来回翻。</p>
+            <p class="section-note" data-i18n="diagnostics.note">把 rednote 服务、Telegram 运行态和抖音下载器状态放到一页里，排障时不用来回翻。</p>
           </div>
 
           <div class="button-row">
@@ -336,7 +259,7 @@
 
       <footer class="site-footer" aria-label="项目元信息" data-i18n-aria-label="footer.aria">
         <div class="site-footer-inner">
-          <span id="footer-version" class="footer-item">v0.2.20</span>
+          <span id="footer-version" class="footer-item">v0.2.21</span>
           <span class="footer-separator" aria-hidden="true"></span>
           <a
             class="footer-link"

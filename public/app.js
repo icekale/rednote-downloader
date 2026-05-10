@@ -1,11 +1,5 @@
 import { COOKIE_STORAGE_KEY, parseCookieText } from './cookie-utils.js';
 import { inferMediaFileName } from '/media-filenames.js';
-import {
-  INTEGRATION_TARGET_STORAGE_KEY,
-  INTEGRATION_TARGETS,
-  normalizeTemplateSlots,
-  resolveInitialIntegrationTarget,
-} from '/integration-utils.js';
 
 const form = document.querySelector('#resolve-form');
 const input = document.querySelector('#input');
@@ -35,16 +29,6 @@ const telegramConfigStatus = document.querySelector('#telegram-config-status');
 const saveTelegramConfigButton = document.querySelector('#save-telegram-config-button');
 const refreshRuntimeButton = document.querySelector('#refresh-runtime-button');
 
-const openclawServiceBaseUrl = document.querySelector('#openclaw-service-base-url');
-const openclawServerName = document.querySelector('#openclaw-server-name');
-const openclawAgentId = document.querySelector('#openclaw-agent-id');
-const openclawMcpScriptPath = document.querySelector('#openclaw-mcp-script-path');
-const integrationTargetButtons = Array.from(document.querySelectorAll('[data-integration-target]'));
-const saveIntegrationConfigButton = document.querySelector('#save-integration-config-button');
-const refreshIntegrationTemplateButton = document.querySelector('#refresh-integration-template-button');
-const integrationStatus = document.querySelector('#integration-status');
-const integrationTemplateSlots = document.querySelector('#integration-template-slots');
-const configPathEl = document.querySelector('#config-path');
 const refreshDiagnosticsButton = document.querySelector('#refresh-diagnostics-button');
 const diagnosticsCardsEl = document.querySelector('#diagnostics-cards');
 const diagnosticsChecksEl = document.querySelector('#diagnostics-checks');
@@ -62,34 +46,21 @@ let latestNote = null;
 let latestDownload = null;
 let latestDiagnostics = null;
 let latestResults = [];
-let latestIntegrationTemplates = null;
-let currentIntegrationTarget = 'openclaw';
-let integrationConfigDraft = {
-  openclaw: {},
-  hermes: {},
-};
-let integrationDraftDirty = false;
 
 const UI_LANGUAGE_STORAGE_KEY = 'rednote-ui-language';
-const INTEGRATION_CONFIG_DEFAULTS = {
-  mcpServerName: 'rednote',
-  preferredAgentId: 'bfxia',
-  toolName: 'resolve_rednote_media',
-};
 const TRANSLATIONS = {
   zh: {
     'meta.title': 'RedNote Downloader',
     'tabs.aria': '主功能标签',
     'tabs.resolve': '解析下载',
-    'tabs.integration': 'Agent 接入',
     'tabs.diagnostics': '诊断',
     'resolve.title': '帖子解析与下载',
     'resolve.input.label': '分享链接或文案',
-    'resolve.input.placeholder': '把小红书分享文案、x.com 链接，或 twitter.com 链接贴在这里\n支持批量输入：一行一条链接。',
+    'resolve.input.placeholder': '把小红书分享文案、x.com/twitter.com 链接，或抖音单视频链接贴在这里\n支持批量输入：一行一条链接。',
     'resolve.openPost': '查看原帖',
     'actions.title': '执行选项',
     'actions.serverDownload': '同时下载到服务端目录',
-    'actions.serverDownloadNote': '公开帖子通常直接可下。只有碰到受限帖、解析失败或风控页时，再展开下面的 Cookie 选项。',
+    'actions.serverDownloadNote': '公开视频通常直接可下。只有碰到受限帖、解析失败或风控页时，再展开下面的 Cookie 选项。',
     'actions.preview': '解析并预览',
     'actions.downloadAll': '全部浏览器下载',
     'actions.proxyDownload': '代理下载',
@@ -98,7 +69,7 @@ const TRANSLATIONS = {
     'cookie.summary.title': '可选 Cookie',
     'cookie.summary.hint': '仅在受限帖子时再填写',
     'cookie.title': '解析鉴权',
-    'cookie.note': 'Cookie 只保存在当前浏览器。大多数公开帖子不用填，失败时再补就够了。',
+    'cookie.note': 'Cookie 只保存在当前浏览器。大多数公开小红书、X 或抖音单视频不用填，失败时再补就够了。',
     'cookie.header': 'Cookie Header',
     'cookie.placeholder': '可直接粘贴 Cookie header，也可以拖入 cookies.txt / JSON',
     'cookie.dropzone.aria': '拖拽导入 Cookie 文件',
@@ -120,24 +91,8 @@ const TRANSLATIONS = {
     'telegram.save': '保存 Telegram 配置',
     'telegram.refresh': '刷新状态',
     'telegram.tip': '提示：document 更适合保留原始文件质量，preview 更适合直接在 Telegram 内预览。',
-    'openclaw.title': 'Agent 接入',
-    'openclaw.note': '生成可直接复制的 OpenClaw / Hermes 片段和 agent 提示词，用来把小红书或 X 的媒体直接回到 Telegram。',
-    'openclaw.config.title': '连接参数',
-    'openclaw.config.serviceBaseAuto': '留空时自动使用当前访问地址',
-    'openclaw.config.scriptPath': '宿主机 MCP 脚本路径',
-    'openclaw.config.scriptPathPlaceholder': '/Users/you/.../rednote/src/mcp-server.js',
-    'openclaw.save': '保存集成配置',
-    'openclaw.refresh': '重新生成模板',
-    'openclaw.tip': '如果 rednote 跑在 Docker、OpenClaw 跑在宿主机，这里必须填宿主机真实路径，不能填容器内 /app/...。',
-    'openclaw.templates.title': '复制片段',
-    'openclaw.templates.mcporter': 'mcporter 配置片段',
-    'openclaw.templates.copyMcporter': '复制 mcporter 配置',
-    'openclaw.templates.agentPrompt': 'Agent 提示词',
-    'openclaw.templates.copyPrompt': '复制 Agent 提示词',
-    'openclaw.templates.copySnippet': '复制片段',
-    'openclaw.templates.configPath': '服务端配置文件路径',
     'diagnostics.title': '联调状态面板',
-    'diagnostics.note': '把 rednote 服务、Telegram 运行态和 OpenClaw 接线情况放到一页里，排障时不用来回翻。',
+    'diagnostics.note': '把 rednote 服务、Telegram 运行态和抖音下载器状态放到一页里，排障时不用来回翻。',
     'diagnostics.refresh': '刷新诊断',
     'diagnostics.checks.title': '健康检查',
     'diagnostics.checks.note': '快速确认服务 base URL 和本地运行态是不是都通的。',
@@ -160,8 +115,9 @@ const TRANSLATIONS = {
     'error.copyFailed': '复制失败',
     'error.initConfigFailed': '初始化配置失败',
     'status.downloadStarted': '已开始下载 {fileName}。',
-    'status.parsing': '正在解析帖子页面...',
+    'status.parsing': '正在解析帖子页面或视频链接...',
     'status.serverDownloadDone': '服务端下载完成，已保存到 {path}',
+    'status.externalDouyinDownloadDone': '抖音上游下载任务完成：{jobId}',
     'status.resolveDone': '解析完成，共找到 {count} 个媒体文件。',
     'status.resolveBatchDone': '批量解析完成，成功 {successCount}/{totalCount} 条，累计 {mediaCount} 个媒体文件。',
     'status.resolveBatchDownloadDone': '批量服务端下载完成，成功 {successCount}/{totalCount} 条，累计 {mediaCount} 个媒体文件。',
@@ -175,20 +131,21 @@ const TRANSLATIONS = {
     'cookie.status.imported': '已导入 {fileName}。',
     'download.summary.title': '服务端下载完成',
     'download.summary.path': '保存路径：',
+    'download.summary.external': '外部下载器：',
+    'download.summary.externalJob': '任务：',
     'media.video': '视频',
     'media.image': '图片',
     'diagnostics.card.service': '服务',
     'diagnostics.card.telegram': 'Telegram',
-    'diagnostics.card.openclaw': 'OpenClaw',
+    'diagnostics.card.douyin': 'Douyin',
     'diagnostics.line.download': 'download',
     'diagnostics.line.config': 'config',
     'diagnostics.line.enabled': 'enabled',
     'diagnostics.line.runtime': 'runtime',
     'diagnostics.line.delivery': 'delivery',
     'diagnostics.line.allowlist': 'allowlist',
-    'diagnostics.line.server': 'server',
-    'diagnostics.line.agent': 'agent',
-    'diagnostics.line.script': 'script',
+    'diagnostics.line.provider': 'provider',
+    'diagnostics.line.baseUrl': 'base URL',
     'diagnostics.value.enabled': 'yes',
     'diagnostics.value.disabled': 'no',
     'diagnostics.value.online': '在线',
@@ -196,7 +153,7 @@ const TRANSLATIONS = {
     'diagnostics.value.ok': '正常',
     'diagnostics.value.missing': '缺失',
     'diagnostics.check.serviceHealth': '当前页面服务 healthz',
-    'diagnostics.check.configuredServiceBase': 'OpenClaw Service Base URL',
+    'diagnostics.check.douyinDownloaderHealth': 'Douyin downloader REST health',
     'diagnostics.check.noDetail': '无详细信息',
     'diagnostics.check.ok': '正常',
     'diagnostics.check.fail': '失败',
@@ -212,31 +169,20 @@ const TRANSLATIONS = {
     'telegram.status.saveFailed': '保存 Telegram 配置失败',
     'telegram.status.refreshed': '运行状态已刷新。',
     'telegram.status.refreshFailed': '刷新失败',
-    'openclaw.status.saving': '正在保存集成配置...',
-    'openclaw.status.saved': '集成配置已保存。',
-    'openclaw.status.saveFailed': '保存集成配置失败',
-    'openclaw.status.templateFailed': '生成集成模板失败',
-    'openclaw.status.templateReady': 'MCP server：{serverName} · 推荐 agent：{agentId}',
-    'openclaw.status.diagnosticsRefreshed': '诊断信息已刷新。',
-    'openclaw.status.diagnosticsFailed': '诊断刷新失败',
-    'copy.mcporter': '已复制 mcporter 配置。',
-    'copy.agentPrompt': '已复制 Agent 提示词。',
-    'copy.template': '已复制模板片段。',
     'copy.diagnostics': '已复制诊断 JSON。',
   },
   en: {
     'meta.title': 'RedNote Downloader',
     'tabs.aria': 'Primary tabs',
     'tabs.resolve': 'Resolve',
-    'tabs.integration': 'Agent Integration',
     'tabs.diagnostics': 'Diagnostics',
     'resolve.title': 'Resolve And Download',
     'resolve.input.label': 'Share URL or text',
-    'resolve.input.placeholder': 'Paste a Xiaohongshu share text, x.com URL, or twitter.com URL here\nBatch input is supported: one link per line.',
+    'resolve.input.placeholder': 'Paste a Xiaohongshu share text, x.com/twitter.com URL, or Douyin single video URL here\nBatch input is supported: one link per line.',
     'resolve.openPost': 'Open Post',
     'actions.title': 'Actions',
     'actions.serverDownload': 'Also save to the server directory',
-    'actions.serverDownloadNote': 'Public posts usually work directly. Only expand the Cookie section when a post is restricted, parsing fails, or you hit an anti-bot page.',
+    'actions.serverDownloadNote': 'Public videos usually work directly. Only expand the Cookie section when a post is restricted, parsing fails, or you hit an anti-bot page.',
     'actions.preview': 'Resolve And Preview',
     'actions.downloadAll': 'Download All In Browser',
     'actions.proxyDownload': 'Proxy Download',
@@ -245,7 +191,7 @@ const TRANSLATIONS = {
     'cookie.summary.title': 'Optional Cookie',
     'cookie.summary.hint': 'Only fill this for restricted posts',
     'cookie.title': 'Request Auth',
-    'cookie.note': 'Cookies are stored only in this browser. Most public posts do not need them, so add one only if parsing fails.',
+    'cookie.note': 'Cookies are stored only in this browser. Most public Xiaohongshu, X, or Douyin single-video links do not need them, so add one only if parsing fails.',
     'cookie.header': 'Cookie Header',
     'cookie.placeholder': 'Paste a Cookie header, or drop in cookies.txt / JSON',
     'cookie.dropzone.aria': 'Drop a cookie file here',
@@ -267,24 +213,8 @@ const TRANSLATIONS = {
     'telegram.save': 'Save Telegram Config',
     'telegram.refresh': 'Refresh Status',
     'telegram.tip': 'Tip: document is better for preserving original file quality, while preview is better for inline Telegram viewing.',
-    'openclaw.title': 'Agent Integration',
-    'openclaw.note': 'Generate copy-ready OpenClaw / Hermes snippets and agent prompts so RedNote or X media can be sent back to Telegram.',
-    'openclaw.config.title': 'Connection Settings',
-    'openclaw.config.serviceBaseAuto': 'leave blank to use the current origin',
-    'openclaw.config.scriptPath': 'Host MCP Script Path',
-    'openclaw.config.scriptPathPlaceholder': '/Users/you/.../rednote/src/mcp-server.js',
-    'openclaw.save': 'Save Integration Config',
-    'openclaw.refresh': 'Regenerate Template',
-    'openclaw.tip': 'If rednote runs in Docker and OpenClaw runs on the host, this must be the real host path, not an in-container /app/... path.',
-    'openclaw.templates.title': 'Copy Snippets',
-    'openclaw.templates.mcporter': 'mcporter Config Snippet',
-    'openclaw.templates.copyMcporter': 'Copy mcporter Config',
-    'openclaw.templates.agentPrompt': 'Agent Prompt',
-    'openclaw.templates.copyPrompt': 'Copy Agent Prompt',
-    'openclaw.templates.copySnippet': 'Copy Snippet',
-    'openclaw.templates.configPath': 'Server Config File Path',
     'diagnostics.title': 'Diagnostics Dashboard',
-    'diagnostics.note': 'Put the rednote service, Telegram runtime, and OpenClaw wiring on one page so debugging does not require tab hopping.',
+    'diagnostics.note': 'Put the rednote service, Telegram runtime, and Douyin downloader status on one page so debugging does not require tab hopping.',
     'diagnostics.refresh': 'Refresh Diagnostics',
     'diagnostics.checks.title': 'Health Checks',
     'diagnostics.checks.note': 'Quickly confirm that the service base URL and local runtime are both reachable.',
@@ -307,8 +237,9 @@ const TRANSLATIONS = {
     'error.copyFailed': 'Copy failed',
     'error.initConfigFailed': 'Failed to initialize the dashboard',
     'status.downloadStarted': 'Download started for {fileName}.',
-    'status.parsing': 'Resolving the post...',
+    'status.parsing': 'Resolving the post or video link...',
     'status.serverDownloadDone': 'Server-side download finished. Saved to {path}',
+    'status.externalDouyinDownloadDone': 'External Douyin download job finished: {jobId}',
     'status.resolveDone': 'Resolved successfully. Found {count} media file(s).',
     'status.resolveBatchDone': 'Batch resolve finished with {successCount}/{totalCount} posts succeeded and {mediaCount} media file(s) found.',
     'status.resolveBatchDownloadDone': 'Batch server-side download finished with {successCount}/{totalCount} posts succeeded and {mediaCount} media file(s) processed.',
@@ -322,20 +253,21 @@ const TRANSLATIONS = {
     'cookie.status.imported': 'Imported {fileName}.',
     'download.summary.title': 'Server-side download completed',
     'download.summary.path': 'Saved path:',
+    'download.summary.external': 'External downloader:',
+    'download.summary.externalJob': 'Job:',
     'media.video': 'Video',
     'media.image': 'Image',
     'diagnostics.card.service': 'Service',
     'diagnostics.card.telegram': 'Telegram',
-    'diagnostics.card.openclaw': 'OpenClaw',
+    'diagnostics.card.douyin': 'Douyin',
     'diagnostics.line.download': 'download',
     'diagnostics.line.config': 'config',
     'diagnostics.line.enabled': 'enabled',
     'diagnostics.line.runtime': 'runtime',
     'diagnostics.line.delivery': 'delivery',
     'diagnostics.line.allowlist': 'allowlist',
-    'diagnostics.line.server': 'server',
-    'diagnostics.line.agent': 'agent',
-    'diagnostics.line.script': 'script',
+    'diagnostics.line.provider': 'provider',
+    'diagnostics.line.baseUrl': 'base URL',
     'diagnostics.value.enabled': 'yes',
     'diagnostics.value.disabled': 'no',
     'diagnostics.value.online': 'online',
@@ -343,7 +275,7 @@ const TRANSLATIONS = {
     'diagnostics.value.ok': 'ok',
     'diagnostics.value.missing': 'missing',
     'diagnostics.check.serviceHealth': 'Current page service healthz',
-    'diagnostics.check.configuredServiceBase': 'OpenClaw Service Base URL',
+    'diagnostics.check.douyinDownloaderHealth': 'Douyin downloader REST health',
     'diagnostics.check.noDetail': 'No detail',
     'diagnostics.check.ok': 'ok',
     'diagnostics.check.fail': 'fail',
@@ -359,16 +291,6 @@ const TRANSLATIONS = {
     'telegram.status.saveFailed': 'Failed to save Telegram config',
     'telegram.status.refreshed': 'Runtime status refreshed.',
     'telegram.status.refreshFailed': 'Failed to refresh status',
-    'openclaw.status.saving': 'Saving integration config...',
-    'openclaw.status.saved': 'Integration config saved.',
-    'openclaw.status.saveFailed': 'Failed to save integration config',
-    'openclaw.status.templateFailed': 'Failed to generate the integration template',
-    'openclaw.status.templateReady': 'MCP server: {serverName} · Recommended agent: {agentId}',
-    'openclaw.status.diagnosticsRefreshed': 'Diagnostics refreshed.',
-    'openclaw.status.diagnosticsFailed': 'Failed to refresh diagnostics',
-    'copy.mcporter': 'Copied the mcporter config.',
-    'copy.agentPrompt': 'Copied the agent prompt.',
-    'copy.template': 'Copied the template snippet.',
     'copy.diagnostics': 'Copied the diagnostics JSON.',
   },
 };
@@ -440,7 +362,6 @@ function setLanguage(lang, { persist = true, reloadRemote = true } = {}) {
   if (reloadRemote) {
     void loadDashboard().catch((error) => {
       setTelegramStatus(error instanceof Error ? error.message : t('error.initConfigFailed'), 'error');
-      setIntegrationStatus(error instanceof Error ? error.message : t('error.initConfigFailed'), 'error');
     });
   }
 }
@@ -493,121 +414,6 @@ function setTelegramStatus(message, tone = '') {
   setMessage(telegramConfigStatus, message, tone);
 }
 
-function setIntegrationStatus(message, tone = '') {
-  setMessage(integrationStatus, message, tone);
-}
-
-function normalizeIntegrationConfig(config = {}, fallbacks = {}) {
-  return {
-    serviceBaseUrl: String(config.serviceBaseUrl || ''),
-    mcpServerName: String(config.mcpServerName || fallbacks.mcpServerName || ''),
-    preferredAgentId: String(config.preferredAgentId || fallbacks.preferredAgentId || ''),
-    mcpScriptPath: String(config.mcpScriptPath || ''),
-    toolName: String(config.toolName || fallbacks.toolName || ''),
-  };
-}
-
-function setIntegrationDraftFromConfig(config = {}) {
-  integrationConfigDraft = {
-    openclaw: normalizeIntegrationConfig(config.openclaw, INTEGRATION_CONFIG_DEFAULTS),
-    hermes: normalizeIntegrationConfig(config.hermes, INTEGRATION_CONFIG_DEFAULTS),
-  };
-  integrationDraftDirty = false;
-}
-
-function syncFormIntoCurrentTargetDraft({ markDirty = true } = {}) {
-  integrationConfigDraft[currentIntegrationTarget] = {
-    ...integrationConfigDraft[currentIntegrationTarget],
-    serviceBaseUrl: openclawServiceBaseUrl.value.trim(),
-    mcpServerName: openclawServerName.value.trim() || integrationConfigDraft[currentIntegrationTarget].mcpServerName || 'rednote',
-    preferredAgentId: openclawAgentId.value.trim() || integrationConfigDraft[currentIntegrationTarget].preferredAgentId || 'bfxia',
-    mcpScriptPath: openclawMcpScriptPath.value.trim(),
-  };
-
-  if (markDirty) {
-    integrationDraftDirty = true;
-  }
-}
-
-function applyTargetDraftToForm(target) {
-  const targetConfig = integrationConfigDraft[target] || {};
-
-  openclawServiceBaseUrl.value = targetConfig.serviceBaseUrl || '';
-  openclawServiceBaseUrl.placeholder = `${window.location.origin} (${t('openclaw.config.serviceBaseAuto')})`;
-  openclawServerName.value = targetConfig.mcpServerName || 'rednote';
-  openclawAgentId.value = targetConfig.preferredAgentId || 'bfxia';
-  openclawMcpScriptPath.value = targetConfig.mcpScriptPath || '';
-}
-
-function getIntegrationTargets() {
-  return latestIntegrationTemplates?.targets || latestIntegrationTemplates || {};
-}
-
-function getCurrentTargetPayload() {
-  return getIntegrationTargets()[currentIntegrationTarget] || {};
-}
-
-function getCurrentTemplateMeta() {
-  return getCurrentTargetPayload().template || {};
-}
-
-function buildIntegrationConfigPayload() {
-  return {
-    openclaw: buildIntegrationPatchFromDraft(integrationConfigDraft.openclaw, INTEGRATION_CONFIG_DEFAULTS),
-    hermes: buildIntegrationPatchFromDraft(integrationConfigDraft.hermes, INTEGRATION_CONFIG_DEFAULTS),
-  };
-}
-
-function renderIntegrationTemplate() {
-  if (!integrationTemplateSlots) {
-    return;
-  }
-
-  const targetPayload = getCurrentTargetPayload();
-  const slots = normalizeTemplateSlots(targetPayload);
-  clearChildren(integrationTemplateSlots);
-
-  for (const slot of slots) {
-    const slotId = `${currentIntegrationTarget}-${slot.key}-snippet`;
-    const item = document.createElement('div');
-    item.className = 'template-item';
-    item.innerHTML = `
-      <label class="field">
-        <span>${escapeHtml(slot.label || slot.key)}</span>
-        <textarea id="${escapeHtml(slotId)}" rows="7" readonly></textarea>
-      </label>
-      <div class="button-row template-actions">
-        <button type="button" data-copy-target="${escapeHtml(slotId)}" class="button">${escapeHtml(slot.copyLabel || t('openclaw.templates.copySnippet'))}</button>
-      </div>
-    `;
-    integrationTemplateSlots.appendChild(item);
-    const textarea = item.querySelector('textarea');
-    if (textarea) {
-      textarea.value = slot.value;
-    }
-    const copyButton = item.querySelector('[data-copy-target]');
-    if (copyButton) {
-      copyButton.addEventListener('click', copyTextFromTarget);
-    }
-  }
-}
-
-function setIntegrationTarget(target, { persist = true } = {}) {
-  const normalized = INTEGRATION_TARGETS.includes(target) ? target : 'openclaw';
-  currentIntegrationTarget = normalized;
-
-  if (persist) {
-    window.localStorage.setItem(INTEGRATION_TARGET_STORAGE_KEY, normalized);
-  }
-
-  integrationTargetButtons.forEach((button) => {
-    button.classList.toggle('active', button.dataset.integrationTarget === normalized);
-  });
-
-  applyTargetDraftToForm(normalized);
-  renderIntegrationTemplate();
-}
-
 function clearChildren(node) {
   while (node.firstChild) {
     node.removeChild(node.firstChild);
@@ -642,9 +448,14 @@ function createMediaEntry(note, item, index, options = {}) {
 
 function buildProxyUrl(entry, inline) {
   const params = new URLSearchParams({
-    url: entry.item.url,
     filename: entry.fileName,
   });
+
+  if (entry.item.localPath) {
+    params.set('path', entry.item.localPath);
+  } else {
+    params.set('url', entry.item.url);
+  }
 
   if (Array.isArray(entry.item.fallbackUrls)) {
     entry.item.fallbackUrls
@@ -852,9 +663,16 @@ function renderDownloadSummary(download, container) {
 
   container.classList.remove('hidden');
   container.classList.add('success');
+  const externalRows = download.external
+    ? `
+      <p>${escapeHtml(t('download.summary.external'))}<code>${escapeHtml(download.external.provider || 'external')}</code></p>
+      <p>${escapeHtml(t('download.summary.externalJob'))}<code>${escapeHtml(download.external.jobId || '')}</code>${download.external.status ? ` · ${escapeHtml(download.external.status)}` : ''}</p>
+    `
+    : '';
   container.innerHTML = `
     <p><strong>${escapeHtml(t('download.summary.title'))}</strong></p>
     <p>${escapeHtml(t('download.summary.path'))}<code>${escapeHtml(download.outputDir)}</code></p>
+    ${externalRows}
   `;
 }
 
@@ -862,6 +680,10 @@ function renderMedia(entries, container) {
   clearChildren(container);
 
   entries.forEach((entry) => {
+    if (!entry.item?.url && !entry.item?.localPath) {
+      return;
+    }
+
     const card = document.createElement('article');
     card.className = 'media-card';
     const { item, index } = entry;
@@ -899,12 +721,15 @@ function renderMedia(entries, container) {
       }, {
         primary: true,
       }),
-      createMediaActionLink(t('actions.openOriginal'), item.url, {
+    );
+
+    if (item.url) {
+      actions.append(createMediaActionLink(t('actions.openOriginal'), item.url, {
         target: '_blank',
         rel: 'noopener noreferrer',
         referrerPolicy: 'no-referrer',
-      })
-    );
+      }));
+    }
 
     card.append(topLine, actions, mediaNode);
     container.appendChild(card);
@@ -1079,13 +904,12 @@ function renderDiagnosticsCards(diagnostics) {
       ],
     },
     {
-      label: 'openclaw',
-      title: t('diagnostics.card.openclaw'),
+      label: 'douyin',
+      title: t('diagnostics.card.douyin'),
       lines: [
-        diagnostics.openclaw.serviceBaseUrl,
-        `${t('diagnostics.line.server')}: ${diagnostics.openclaw.serverName}.${diagnostics.openclaw.toolName}`,
-        `${t('diagnostics.line.agent')}: ${diagnostics.openclaw.preferredAgentId}`,
-        `${t('diagnostics.line.script')}: ${diagnostics.openclaw.mcpScriptExists ? t('diagnostics.value.ok') : t('diagnostics.value.missing')}`,
+        `${t('diagnostics.line.enabled')}: ${diagnostics.douyin?.externalConfigured ? t('diagnostics.value.enabled') : t('diagnostics.value.disabled')}`,
+        `${t('diagnostics.line.provider')}: ${diagnostics.douyin?.provider || 'jiji262/douyin-downloader'}`,
+        `${t('diagnostics.line.baseUrl')}: ${diagnostics.douyin?.baseUrl || t('diagnostics.value.missing')}`,
       ],
     },
   ];
@@ -1115,11 +939,14 @@ function renderDiagnosticsChecks(checks) {
 
   const entries = [
     { key: 'serviceHealth', label: t('diagnostics.check.serviceHealth') },
-    { key: 'configuredServiceBase', label: t('diagnostics.check.configuredServiceBase') },
+    { key: 'douyinDownloaderHealth', label: t('diagnostics.check.douyinDownloaderHealth') },
   ];
 
   entries.forEach(({ key, label }) => {
     const check = checks[key];
+    if (!check) {
+      return;
+    }
     const row = document.createElement('div');
     row.className = 'check-row';
     row.innerHTML = `
@@ -1185,6 +1012,8 @@ async function onSubmit(event) {
         totalCount: results.length,
         mediaCount,
       }), successResults.length === 0);
+    } else if (data.download?.external?.jobId) {
+      setStatus(t('status.externalDouyinDownloadDone', { jobId: data.download.external.jobId }));
     } else if (data.download?.outputDir) {
       setStatus(t('status.serverDownloadDone', { path: data.download.outputDir }));
     } else {
@@ -1276,7 +1105,7 @@ function onDragLeave() {
   cookieDropzone.classList.remove('dragover');
 }
 
-function applyConfigToForm(config, telegram, { preserveIntegrationDraft = true } = {}) {
+function applyConfigToForm(config, telegram) {
   telegramEnabled.checked = config.telegram.enabled;
   telegramAllowedChatIds.value = config.telegram.allowedChatIds || '';
   telegramDeliveryMode.value = telegram.deliveryMode || config.telegram.deliveryMode || 'document';
@@ -1285,19 +1114,6 @@ function applyConfigToForm(config, telegram, { preserveIntegrationDraft = true }
     : t('telegram.tokenHint.none');
   telegramBotToken.value = '';
   telegramClearToken.checked = false;
-
-  if (preserveIntegrationDraft && integrationDraftDirty) {
-    applyTargetDraftToForm(currentIntegrationTarget);
-    return;
-  }
-
-  setIntegrationDraftFromConfig(config);
-
-  const initialTarget = resolveInitialIntegrationTarget({
-    storageValue: window.localStorage.getItem(INTEGRATION_TARGET_STORAGE_KEY),
-    config,
-  });
-  setIntegrationTarget(initialTarget, { persist: false });
 }
 
 async function loadDiagnostics() {
@@ -1315,12 +1131,8 @@ async function loadDashboard(options = {}) {
     fetchJson('/api/telegram/status'),
   ]);
 
-  configPathEl.textContent = configData.configPath;
   applyConfigToForm(configData.config, telegramData.telegram, options);
-  await Promise.all([
-    refreshIntegrationTemplate(),
-    loadDiagnostics(),
-  ]);
+  await loadDiagnostics();
 }
 
 async function loadFooterMeta() {
@@ -1334,7 +1146,7 @@ async function loadFooterMeta() {
       footerVersionEl.textContent = `v${data.version}`;
     }
   } catch {
-    footerVersionEl.textContent = footerVersionEl.textContent || 'v0.2.20';
+    footerVersionEl.textContent = footerVersionEl.textContent || 'v0.2.19';
   }
 }
 
@@ -1365,7 +1177,7 @@ async function saveTelegramConfig() {
       body: JSON.stringify(patch),
     });
 
-    await loadDashboard({ preserveIntegrationDraft: true });
+    await loadDashboard();
     setTelegramStatus(t('telegram.status.saved'), 'success');
   } catch (error) {
     setTelegramStatus(error instanceof Error ? error.message : t('telegram.status.saveFailed'), 'error');
@@ -1374,64 +1186,9 @@ async function saveTelegramConfig() {
   }
 }
 
-function buildIntegrationPatchFromDraft(targetConfig, defaults) {
-  return {
-    serviceBaseUrl: String(targetConfig.serviceBaseUrl || '').trim(),
-    mcpServerName: String(targetConfig.mcpServerName || '').trim() || defaults.mcpServerName,
-    preferredAgentId: String(targetConfig.preferredAgentId || '').trim() || defaults.preferredAgentId,
-    mcpScriptPath: String(targetConfig.mcpScriptPath || '').trim(),
-    toolName: String(targetConfig.toolName || '').trim() || defaults.toolName,
-  };
-}
-
-async function saveIntegrationConfig() {
-  setIntegrationStatus(t('openclaw.status.saving'));
-  saveIntegrationConfigButton.disabled = true;
-  syncFormIntoCurrentTargetDraft();
-
-  try {
-    await fetchJson('/api/config', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(buildIntegrationConfigPayload()),
-    });
-
-    await loadDashboard({ preserveIntegrationDraft: false });
-    setIntegrationStatus(t('openclaw.status.saved'), 'success');
-  } catch (error) {
-    setIntegrationStatus(error instanceof Error ? error.message : t('openclaw.status.saveFailed'), 'error');
-  } finally {
-    saveIntegrationConfigButton.disabled = false;
-  }
-}
-
-async function refreshIntegrationTemplate() {
-  try {
-    syncFormIntoCurrentTargetDraft({ markDirty: false });
-    const data = await fetchJson('/api/integration/template', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(buildIntegrationConfigPayload()),
-    });
-    latestIntegrationTemplates = data.integration;
-    renderIntegrationTemplate();
-    const template = getCurrentTemplateMeta();
-    setIntegrationStatus(t('openclaw.status.templateReady', {
-      serverName: template.serverName || 'rednote',
-      agentId: template.preferredAgentId || 'bfxia',
-    }));
-  } catch (error) {
-    setIntegrationStatus(error instanceof Error ? error.message : t('openclaw.status.templateFailed'), 'error');
-  }
-}
-
 async function refreshRuntime() {
   try {
-    await loadDashboard({ preserveIntegrationDraft: true });
+    await loadDashboard();
     setTelegramStatus(t('telegram.status.refreshed'), 'success');
   } catch (error) {
     setTelegramStatus(error instanceof Error ? error.message : t('telegram.status.refreshFailed'), 'error');
@@ -1443,9 +1200,8 @@ async function refreshDiagnostics() {
 
   try {
     await loadDiagnostics();
-    setIntegrationStatus(t('openclaw.status.diagnosticsRefreshed'), 'success');
   } catch (error) {
-    setIntegrationStatus(error instanceof Error ? error.message : t('openclaw.status.diagnosticsFailed'), 'error');
+    setTelegramStatus(error instanceof Error ? error.message : t('telegram.status.refreshFailed'), 'error');
   } finally {
     refreshDiagnosticsButton.disabled = false;
   }
@@ -1460,10 +1216,9 @@ async function copyTextFromTarget(event) {
 
   try {
     await navigator.clipboard.writeText(target.value || target.textContent || '');
-    const key = targetId === 'diagnostics-json' ? 'copy.diagnostics' : 'copy.template';
-    setIntegrationStatus(t(key), 'success');
+    setTelegramStatus(t('copy.diagnostics'), 'success');
   } catch (error) {
-    setIntegrationStatus(error instanceof Error ? error.message : t('error.copyFailed'), 'error');
+    setTelegramStatus(error instanceof Error ? error.message : t('error.copyFailed'), 'error');
   }
 }
 
@@ -1485,22 +1240,6 @@ cookieDropzone.addEventListener('drop', onDrop);
 saveTelegramConfigButton.addEventListener('click', saveTelegramConfig);
 refreshRuntimeButton.addEventListener('click', refreshRuntime);
 refreshDiagnosticsButton.addEventListener('click', refreshDiagnostics);
-saveIntegrationConfigButton.addEventListener('click', saveIntegrationConfig);
-refreshIntegrationTemplateButton.addEventListener('click', refreshIntegrationTemplate);
-[
-  openclawServiceBaseUrl,
-  openclawServerName,
-  openclawAgentId,
-  openclawMcpScriptPath,
-].forEach((element) => {
-  element.addEventListener('input', () => syncFormIntoCurrentTargetDraft());
-});
-integrationTargetButtons.forEach((button) => {
-  button.addEventListener('click', () => {
-    syncFormIntoCurrentTargetDraft({ markDirty: false });
-    setIntegrationTarget(button.dataset.integrationTarget || 'openclaw');
-  });
-});
 tabButtons.forEach((button) => {
   button.addEventListener('click', () => switchTab(button.dataset.tab));
 });
@@ -1516,5 +1255,4 @@ loadSavedCookie();
 void loadFooterMeta();
 loadDashboard().catch((error) => {
   setTelegramStatus(error instanceof Error ? error.message : t('error.initConfigFailed'), 'error');
-  setIntegrationStatus(error instanceof Error ? error.message : t('error.initConfigFailed'), 'error');
 });

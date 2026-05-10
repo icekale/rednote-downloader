@@ -1,12 +1,21 @@
 import http from 'node:http';
 import path from 'node:path';
-import { constants as fsConstants } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
-import { access, mkdir, readFile } from 'node:fs/promises';
+import { access, mkdir, readFile, stat } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import packageMeta from '../package.json' with { type: 'json' };
 import { mapWithConcurrency, normalizePositiveInt } from './async-utils.js';
-import { downloadMedia, extractAllUrls, fetchMediaResponse, resolveNote, sanitizeFileName } from './xhs.js';
+import {
+  downloadDouyinViaExternalService,
+  downloadMedia,
+  extractAllUrls,
+  fetchMediaResponse,
+  isDouyinShareHost,
+  resolveNote,
+  sanitizeFileName,
+} from './xhs.js';
+import { buildExternalDouyinConfig, isExternalDouyinConfigured } from './douyin-external.js';
 import { TelegramBotRunner, parseAllowedChatIds } from './telegram.js';
 import {
   getAppConfigPath,
@@ -19,26 +28,21 @@ import {
   migrateLegacyDownloadEntries,
   normalizeDeliveryMode,
   normalizeEnvBoolean,
-  normalizeServiceBaseUrl,
   saveAppConfig,
   saveAppState,
 } from './config.js';
-import { buildIntegrationTemplates, buildOpenClawResolvePayload, buildOpenClawTemplate } from './openclaw.js';
 
 const DEFAULT_ADMIN_HEADER_NAME = 'X-Admin-Token';
 const ADMIN_PATHS = new Set([
   '/api/config',
   '/api/telegram/status',
   '/api/diagnostics',
-  '/api/openclaw/template',
-  '/api/integration/template',
 ]);
 
 const DEFAULT_STATIC_ROUTES = new Map([
   ['/', 'index.html'],
   ['/app.js', 'app.js'],
   ['/cookie-utils.js', 'cookie-utils.js'],
-  ['/integration-utils.js', path.join(process.cwd(), 'src', 'shared', 'agent-integration.js')],
   ['/icon.svg', 'icon.svg'],
   ['/media-filenames.js', path.join(process.cwd(), 'src', 'shared', 'media-filenames.js')],
   ['/styles.css', 'styles.css'],
@@ -100,6 +104,27 @@ function buildDisposition(fileName, inline) {
   return `${inline ? 'inline' : 'attachment'}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }
 
+function contentTypeFromMediaFileName(fileName) {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith('.mp4')) return 'video/mp4';
+  if (lower.endsWith('.m4v')) return 'video/mp4';
+  if (lower.endsWith('.mov')) return 'video/quicktime';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  return 'application/octet-stream';
+}
+
+function isPathInside(candidate, root) {
+  if (!candidate || !root) {
+    return false;
+  }
+
+  const relative = path.relative(root, candidate);
+  return relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -134,46 +159,6 @@ function getRequestOrigin(request, fallbackPort) {
     || (request.socket.encrypted ? 'https' : 'http');
   const host = request.headers['x-forwarded-host'] || request.headers.host || `127.0.0.1:${fallbackPort}`;
   return `${protocol}://${host}`.replace(/\/$/, '');
-}
-
-async function pathExists(targetPath) {
-  if (!targetPath) {
-    return false;
-  }
-
-  try {
-    await access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function probeCliAvailable(binaryName, env = process.env) {
-  const name = typeof binaryName === 'string' ? binaryName.trim() : '';
-  const pathValue = typeof env?.PATH === 'string' ? env.PATH : '';
-  if (!name || !pathValue) {
-    return false;
-  }
-
-  const dirs = pathValue.split(path.delimiter).map((value) => value.trim()).filter(Boolean);
-  const suffixes = process.platform === 'win32'
-    ? ['.exe', '.cmd', '.bat', '']
-    : [''];
-
-  for (const dir of dirs) {
-    for (const suffix of suffixes) {
-      const candidate = path.join(dir, `${name}${suffix}`);
-      try {
-        await access(candidate, fsConstants.X_OK);
-        return true;
-      } catch {
-        // keep searching
-      }
-    }
-  }
-
-  return false;
 }
 
 async function probeJsonEndpoint(url) {
@@ -218,27 +203,25 @@ function buildDiagnosticsHints(context, language = 'zh') {
     );
   }
 
-  if (!context.openclaw.mcpScriptExists) {
-    hints.push(
-      isEnglish
-        ? 'The configured OpenClaw MCP script path is not readable. If rednote runs in Docker and OpenClaw runs on the host, use the real host path instead of an in-container path.'
-        : 'OpenClaw 的 MCP 脚本路径当前不可读。若 rednote 在 Docker、OpenClaw 在宿主机，请填写宿主机真实路径。',
-    );
-  }
-
-  if (!context.checks.configuredServiceBase.ok) {
-    hints.push(
-      isEnglish
-        ? 'The configured OpenClaw service base URL did not pass the health check, so OpenClaw may fail to connect back to rednote.'
-        : '配置中的 OpenClaw Service Base URL 没有通过健康检查，OpenClaw 调用 rednote 时可能会连不上。',
-    );
-  }
-
   if (!context.telegram.allowedChatIdsConfigured) {
     hints.push(
       isEnglish
         ? 'Telegram currently has no Chat ID allowlist configured, so the bot will accept messages from any chat by default.'
         : 'Telegram 目前没有配置 Chat ID 白名单，默认会接受所有会话。',
+    );
+  }
+
+  if (!context.douyin.externalConfigured) {
+    hints.push(
+      isEnglish
+        ? 'Douyin server-side downloads can use jiji262/douyin-downloader directly. Set DOUYIN_DOWNLOADER_BASE_URL to its REST service when you want to bypass the built-in Douyin detail parser.'
+        : '抖音服务端下载可以直接复用 jiji262/douyin-downloader。需要绕过内置抖音详情解析时，设置 DOUYIN_DOWNLOADER_BASE_URL 指向它的 REST 服务。',
+    );
+  } else if (!context.checks.douyinDownloaderHealth.ok) {
+    hints.push(
+      isEnglish
+        ? 'DOUYIN_DOWNLOADER_BASE_URL is configured, but its /api/v1/health check failed. Start the upstream service with `python run.py --serve --serve-port 8000`.'
+        : '已配置 DOUYIN_DOWNLOADER_BASE_URL，但它的 /api/v1/health 检查失败。请用 `python run.py --serve --serve-port 8000` 启动上游服务。',
     );
   }
 
@@ -303,11 +286,13 @@ export function buildServerOptions(options = {}) {
     corsAllowedOrigins: new Set(corsAllowedOrigins.map(normalizeOrigin).filter(Boolean)),
     batchResolveConcurrency: normalizePositiveInt(options.batchResolveConcurrency ?? env.BATCH_RESOLVE_CONCURRENCY, 3),
     mediaDownloadConcurrency: normalizePositiveInt(options.mediaDownloadConcurrency ?? env.MEDIA_DOWNLOAD_CONCURRENCY, 3),
+    douyinDownloaderOutputDir: buildExternalDouyinConfig(env).outputDir,
     staticRoutes: options.staticRoutes || DEFAULT_STATIC_ROUTES,
     log: options.log || console,
     skipMigrations: Boolean(options.skipMigrations),
     dependencies: {
       downloadMedia,
+      downloadDouyinViaExternalService,
       extractAllUrls,
       fetchMediaResponse,
       resolveNote,
@@ -321,6 +306,7 @@ export async function createRednoteApp(options = {}) {
   const settings = buildServerOptions(options);
   const {
     downloadMedia: downloadMediaImpl,
+    downloadDouyinViaExternalService: downloadDouyinViaExternalServiceImpl,
     extractAllUrls: extractAllUrlsImpl,
     fetchMediaResponse: fetchMediaResponseImpl,
     resolveNote: resolveNoteImpl,
@@ -444,7 +430,81 @@ export async function createRednoteApp(options = {}) {
     }
   }
 
+  function isDouyinInput(input) {
+    try {
+      return isDouyinShareHost(new URL(extractAllUrlsImpl(input)[0]).hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  function buildExternalDouyinDownloadNote(input, downloaded) {
+    return downloaded.note || {
+      resolvedUrl: input,
+      noteId: downloaded.external?.jobId || 'douyin',
+      title: 'Douyin external download',
+      description: '',
+      type: 'video',
+      author: {
+        nickname: '',
+        userId: '',
+      },
+      media: downloaded.files || [],
+      warnings: [
+        'Douyin media was downloaded by the external downloader; preview URLs are not returned by its REST API.',
+      ],
+    };
+  }
+
+  function getAllowedLocalMediaRoots() {
+    return [
+      settings.downloadDir,
+      settings.douyinDownloaderOutputDir,
+    ].filter(Boolean).map((value) => path.resolve(value));
+  }
+
+  async function resolveAllowedLocalMediaPath(inputPath) {
+    const targetPath = path.resolve(String(inputPath || ''));
+    const allowed = getAllowedLocalMediaRoots().some((root) => isPathInside(targetPath, root));
+
+    if (!allowed) {
+      throw new Error(`Unsupported local media path: ${targetPath}`);
+    }
+
+    const fileStat = await stat(targetPath);
+    if (!fileStat.isFile()) {
+      throw new Error(`Local media path is not a file: ${targetPath}`);
+    }
+
+    return {
+      targetPath,
+      fileStat,
+    };
+  }
+
   async function resolveInputResult(resolvedInput, body, download) {
+    const externalDouyinConfig = buildExternalDouyinConfig(settings.env);
+    const useExternalDouyinDownload = isDouyinInput(resolvedInput)
+      && isExternalDouyinConfigured(externalDouyinConfig);
+
+    if (useExternalDouyinDownload) {
+      const downloaded = await downloadDouyinViaExternalServiceImpl({
+        input: resolvedInput,
+        config: externalDouyinConfig,
+        cookie: body.cookie,
+      });
+
+      return {
+        input: resolvedInput,
+        ok: true,
+        note: buildExternalDouyinDownloadNote(resolvedInput, downloaded),
+        download: {
+          outputDir: downloaded.outputDir,
+          external: downloaded.external,
+        },
+      };
+    }
+
     const note = await resolveNoteImpl(resolvedInput, {
       cookie: body.cookie,
     });
@@ -478,6 +538,7 @@ export async function createRednoteApp(options = {}) {
       },
       download: {
         outputDir: downloaded.outputDir,
+        external: downloaded.external,
       },
     };
   }
@@ -552,14 +613,29 @@ export async function createRednoteApp(options = {}) {
 
   async function handleMediaProxy(request, response, url) {
     const target = url.searchParams.get('url');
+    const localPath = url.searchParams.get('path');
     const fallbackTargets = url.searchParams.getAll('fallback').filter(Boolean);
     const inline = url.searchParams.get('inline') === '1';
     const requestedName = url.searchParams.get('filename');
 
+    if (localPath) {
+      const { targetPath, fileStat } = await resolveAllowedLocalMediaPath(localPath);
+      const fileName = requestedName || path.basename(targetPath);
+      response.writeHead(200, {
+        'Access-Control-Allow-Origin': '*',
+        'Accept-Ranges': 'bytes',
+        'Content-Disposition': buildDisposition(fileName, inline),
+        'Content-Length': String(fileStat.size),
+        'Content-Type': contentTypeFromMediaFileName(fileName),
+      });
+      await pipeline(createReadStream(targetPath), response);
+      return;
+    }
+
     if (!target) {
       sendJson(request, response, 400, {
         ok: false,
-        error: 'Missing required `url` query parameter.',
+        error: 'Missing required `url` or `path` query parameter.',
       });
       return;
     }
@@ -645,51 +721,23 @@ export async function createRednoteApp(options = {}) {
     });
   }
 
-  function getIntegrationTargetPayload(templates, target) {
-    return templates?.targets?.[target] || templates?.[target] || {};
-  }
-
-  function buildIntegrationTemplatePayload(configSource, origin) {
-    const config = getPublicConfig(configSource);
-    const openclawServiceBaseUrl = normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl, origin);
-    const hermesServiceBaseUrl = normalizeServiceBaseUrl(config.hermes.serviceBaseUrl, origin);
-
-    return buildIntegrationTemplates({
-      nodeCommand: 'node',
-      openclaw: {
-        serviceBaseUrl: openclawServiceBaseUrl,
-        serverName: config.openclaw.mcpServerName,
-        toolName: config.openclaw.toolName,
-        preferredAgentId: config.openclaw.preferredAgentId,
-        mcpScriptPath: config.openclaw.mcpScriptPath || path.join(process.cwd(), 'src', 'mcp-server.js'),
-      },
-      hermes: {
-        serviceBaseUrl: hermesServiceBaseUrl,
-        serverName: config.hermes.mcpServerName,
-        toolName: config.hermes.toolName,
-        preferredAgentId: config.hermes.preferredAgentId,
-        mcpScriptPath: config.hermes.mcpScriptPath || path.join(process.cwd(), 'src', 'mcp-server.js'),
-      },
-    });
-  }
-
   async function handleDiagnostics(request, response) {
     const config = getPublicConfig(appConfig);
     const origin = getRequestOrigin(request, settings.port);
     const url = new URL(request.url, origin);
     const language = normalizeUiLanguage(url.searchParams.get('lang'));
-    const openclawServiceBaseUrl = normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl, origin);
-    const hermesServiceBaseUrl = normalizeServiceBaseUrl(config.hermes.serviceBaseUrl, origin);
-    const templates = buildIntegrationTemplatePayload(appConfig, origin);
-    const openclawTemplate = getIntegrationTargetPayload(templates, 'openclaw').template;
-    const hermesTemplate = getIntegrationTargetPayload(templates, 'hermes').template;
+    const douyinDownloader = buildExternalDouyinConfig(settings.env);
+    const douyinDownloaderConfigured = isExternalDouyinConfigured(douyinDownloader);
 
-    const [serviceHealth, configuredServiceBase, openclawMcpScriptExists, hermesMcpScriptExists, hermesCliAvailable] = await Promise.all([
+    const [serviceHealth, douyinDownloaderHealth] = await Promise.all([
       probeJsonEndpoint(`${origin}/healthz`),
-      probeJsonEndpoint(`${openclawServiceBaseUrl}/healthz`),
-      pathExists(openclawTemplate.mcpScriptPath),
-      pathExists(hermesTemplate.mcpScriptPath),
-      probeCliAvailable('hermes', settings.env),
+      douyinDownloaderConfigured
+        ? probeJsonEndpoint(`${douyinDownloader.baseUrl}/api/v1/health`)
+        : Promise.resolve({
+          ok: false,
+          status: 0,
+          detail: 'DOUYIN_DOWNLOADER_BASE_URL is not configured',
+        }),
     ]);
 
     const diagnostics = {
@@ -709,26 +757,14 @@ export async function createRednoteApp(options = {}) {
         allowedChatIdsCount: telegramRuntimeConfig?.allowedChatIds?.size || 0,
         deliveryMode: telegramRuntimeConfig?.deliveryMode || config.telegram.deliveryMode,
       },
-      openclaw: {
-        serviceBaseUrl: openclawServiceBaseUrl,
-        serverName: openclawTemplate.serverName,
-        toolName: openclawTemplate.toolName,
-        preferredAgentId: openclawTemplate.preferredAgentId,
-        mcpScriptPath: openclawTemplate.mcpScriptPath,
-        mcpScriptExists: openclawMcpScriptExists,
-      },
-      hermes: {
-        serviceBaseUrl: hermesServiceBaseUrl,
-        serverName: hermesTemplate.serverName,
-        toolName: hermesTemplate.toolName,
-        preferredAgentId: hermesTemplate.preferredAgentId,
-        mcpScriptPath: hermesTemplate.mcpScriptPath,
-        mcpScriptExists: hermesMcpScriptExists,
-        cliAvailable: hermesCliAvailable,
+      douyin: {
+        externalConfigured: douyinDownloaderConfigured,
+        baseUrl: douyinDownloader.baseUrl,
+        provider: 'jiji262/douyin-downloader',
       },
       checks: {
         serviceHealth,
-        configuredServiceBase,
+        douyinDownloaderHealth,
       },
     };
 
@@ -737,62 +773,6 @@ export async function createRednoteApp(options = {}) {
     sendJson(request, response, 200, {
       ok: true,
       diagnostics,
-    });
-  }
-
-  async function handleOpenClawTemplate(request, response) {
-    const config = getPublicConfig(appConfig);
-    const template = buildOpenClawTemplate({
-      serviceBaseUrl: normalizeServiceBaseUrl(config.openclaw.serviceBaseUrl, getRequestOrigin(request, settings.port)),
-      serverName: config.openclaw.mcpServerName,
-      toolName: config.openclaw.toolName,
-      preferredAgentId: config.openclaw.preferredAgentId,
-      mcpScriptPath: config.openclaw.mcpScriptPath || path.join(process.cwd(), 'src', 'mcp-server.js'),
-      nodeCommand: 'node',
-    });
-
-    sendJson(request, response, 200, {
-      ok: true,
-      openclaw: template,
-    });
-  }
-
-  async function handleIntegrationTemplate(request, response) {
-    const origin = getRequestOrigin(request, settings.port);
-    const body = request.method === 'POST' ? await readJsonBody(request) : null;
-    const configSource = body ? mergeAppConfig(appConfig, body) : appConfig;
-    const templates = buildIntegrationTemplatePayload(configSource, origin);
-
-    sendJson(request, response, 200, {
-      ok: true,
-      integration: templates,
-    });
-  }
-
-  async function handleOpenClawResolve(request, response, url) {
-    const queryInput = url.searchParams.get('input');
-    const body = request.method === 'POST' ? await readJsonBody(request) : {};
-    const input = body.input || queryInput;
-    const cookie = body.cookie;
-
-    if (!input || typeof input !== 'string') {
-      sendJson(request, response, 400, {
-        ok: false,
-        error: 'Missing required `input` string.',
-      });
-      return;
-    }
-
-    const note = await resolveNoteImpl(input, { cookie });
-    const baseUrl = normalizeServiceBaseUrl(
-      body.serviceBaseUrl || appConfig.openclaw.serviceBaseUrl,
-      getRequestOrigin(request, settings.port),
-    );
-
-    sendJson(request, response, 200, {
-      ok: true,
-      note,
-      openclaw: buildOpenClawResolvePayload(note, { baseUrl }),
     });
   }
 
@@ -847,21 +827,6 @@ export async function createRednoteApp(options = {}) {
 
       if (request.method === 'POST' && url.pathname === '/api/config') {
         await handleConfigWrite(request, response);
-        return;
-      }
-
-      if (request.method === 'GET' && url.pathname === '/api/openclaw/template') {
-        await handleOpenClawTemplate(request, response);
-        return;
-      }
-
-      if ((request.method === 'GET' || request.method === 'POST') && url.pathname === '/api/integration/template') {
-        await handleIntegrationTemplate(request, response);
-        return;
-      }
-
-      if ((request.method === 'GET' || request.method === 'POST') && url.pathname === '/api/openclaw/resolve') {
-        await handleOpenClawResolve(request, response, url);
         return;
       }
 

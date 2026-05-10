@@ -125,17 +125,17 @@ test('config writes persist to disk and return a masked public snapshot', async 
   assert.equal(savedConfig.telegram.allowedChatIds, '10001,10002');
 });
 
-test('OpenClaw template and diagnostics fall back to the current request origin when serviceBaseUrl is blank', async (t) => {
+test('agent integration endpoints are no longer exposed', async (t) => {
   const { origin } = await createTestApp(t);
 
   const template = await requestJson(`${origin}/api/openclaw/template`);
-  assert.equal(template.response.status, 200);
-  assert.equal(template.json.openclaw.serviceBaseUrl, origin);
-  assert.match(template.json.openclaw.mcporterSnippet, new RegExp(`"REDNOTE_SERVICE_BASE_URL": "${origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+  assert.equal(template.response.status, 404);
+  assert.equal(template.json.ok, false);
 
   const diagnostics = await requestJson(`${origin}/api/diagnostics`);
   assert.equal(diagnostics.response.status, 200);
-  assert.equal(diagnostics.json.diagnostics.openclaw.serviceBaseUrl, origin);
+  assert.equal(diagnostics.json.diagnostics.openclaw, undefined);
+  assert.equal(diagnostics.json.diagnostics.hermes, undefined);
 });
 
 test('batch resolve honors the configured concurrency limit and preserves input order', async (t) => {

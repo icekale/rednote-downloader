@@ -1,9 +1,9 @@
 {
   "name": "rednote-downloader-service",
-  "version": "0.2.20",
+  "version": "0.2.21",
   "private": true,
   "type": "module",
-  "description": "A Docker-first self-hosted downloader for RedNote/Xiaohongshu and X/Twitter, with a web UI, Telegram delivery, and OpenClaw integration.",
+  "description": "A Docker-first self-hosted downloader for RedNote/Xiaohongshu, X/Twitter, and Douyin single videos, with a web UI and Telegram delivery.",
   "engines": {
     "node": ">=20"
   },

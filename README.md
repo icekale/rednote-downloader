@@ -2,29 +2,25 @@
 
 [中文](README.md) | [English](README.en.md)
 
-一个面向 RedNote / 小红书 与 `x.com` / `twitter.com` 的 Docker-first 自托管媒体工具。它把帖子解析、浏览器预览、代理下载、Telegram 回传和 OpenClaw 接入放进同一个 Node 服务里，适合在本地、NAS 或小型服务器上长期运行。
+一个 Docker-first 的自托管媒体解析与下载工具，支持 RedNote / 小红书、`x.com` / `twitter.com`，以及抖音单视频链接或分享文案。它提供网页预览、本地代理下载、可选服务端保存和 Telegram 回传，不再包含 Agent / OpenClaw / MCP 接入功能。
 
-服务支持三种常见用法：
+## 主要功能
 
-- 在网页里粘贴帖子链接或整段分享文案，直接解析、预览和下载图片/视频
-- 在 Telegram 里把链接发给 bot，让它把媒体回到聊天里
-- 在 OpenClaw 里通过 MCP 工具调用本服务，把结果继续交给 agent 工作流
-
-当前前端控制台包含四个标签页：
-
-- `解析下载`：解析媒体、批量浏览器下载、可选保存到服务端目录
-- `Telegram`：图形化保存 bot token、chat allowlist 和发送模式
-- `OpenClaw`：生成 `mcporter` 配置片段和推荐 agent 提示词
-- `诊断`：查看服务、Telegram、OpenClaw 的当前运行状态
+- 解析小红书分享文案、`xhslink.com`、RedNote 页面链接。
+- 解析 `x.com` / `twitter.com` 帖子媒体。
+- 解析抖音单视频分享文案、短链和 `douyin.com/video/{aweme_id}`。
+- 浏览器内预览图片和视频，并通过本地 `/api/media` 代理下载。
+- 可选保存到服务端下载目录。
+- 可选配置 Telegram bot，把解析到的媒体回传到聊天。
+- Cookie 输入框复用为请求级 Cookie，仅在受限内容或风控时填写。
 
 ## 能力边界
 
-- 服务优先使用页面里直接暴露出来的 CDN 地址。
-- 图片下载优先尝试页面图片地址推导出的 `ci.xiaohongshu.com` 直链。
-- 视频下载优先尝试 `originVideoKey` 对应的直链，其次回退到页面流地址。
-- `x.com` / `twitter.com` 帖子当前通过 `FixTweet API` 获取元数据，再直接回源下载 `pbs.twimg.com` / `video.twimg.com` 地址。
-- 服务不会对媒体做二次压缩、转码或重新加水印。
-- 如果小红书返回验证码、风控页，或者页面没有暴露直链，服务会直接报错，不做绕过。
+- 抖音第一版只支持单视频，不支持图文、主页、合集、音乐、收藏、直播或批量主页下载。
+- “去水印”定义为优先选择平台返回的无水印或低水印视频源；如果只能拿到疑似带水印候选，会返回 warning 并仍允许下载。
+- 服务不会对媒体做转码、压缩、裁剪或 OpenCV/ffmpeg 水印擦除。
+- 如果目标站点返回验证码、风控页，或者没有暴露可用媒体地址，服务会直接报错。
+- 抖音服务端下载可选接入 `jiji262/douyin-downloader` 的 REST 服务；Cookie 不会写入镜像。
 
 ## API
 
@@ -38,55 +34,45 @@
 
 ```json
 {
-  "input": "小红书分享文案、x.com/twitter.com 链接，或者分享文本",
+  "input": "小红书、X/Twitter、抖音单视频链接或分享文案",
   "download": true,
-  "cookie": "可选，覆盖环境变量 XHS_COOKIE"
+  "cookie": "可选 Cookie header"
 }
 ```
 
 返回：
 
-- `download: false` 时，返回解析出的媒体直链信息。
-- `download: true` 时，服务会把文件下载到 `DOWNLOAD_DIR`，并返回实际保存路径。
+- `download: false` 时返回解析出的媒体信息。
+- `download: true` 时把文件保存到 `DOWNLOAD_DIR`，并返回保存路径。
+- 批量输入支持一行一个链接，返回 `batch: true` 和 `results`。
+
+### `GET /api/media`
+
+代理下载远端媒体或允许目录内的本地媒体。
+
+常见参数：
+
+- `url`: 远端媒体 URL。
+- `fallback`: 可重复传入的备用媒体 URL。
+- `path`: 本地媒体绝对路径，必须位于允许目录内。
+- `filename`: 下载文件名。
+- `inline=1`: 浏览器内预览。
 
 ### `GET /api/telegram/status`
 
-返回当前 Telegram bot 模式是否启用。
+返回当前 Telegram bot 运行状态。
 
 ### `GET /api/config`
 
-返回当前图形化配置页使用的配置快照。
+返回网页控制台使用的公开配置快照。
 
 ### `POST /api/config`
 
-保存 Telegram / OpenClaw 配置，并在 Telegram 配置变更后立即热更新运行时。
+保存 Telegram 配置，并在保存后热更新 Telegram 运行态。
 
-### `GET /api/openclaw/template`
+### `GET /api/diagnostics`
 
-返回 OpenClaw 接入模板：
-
-- `mcporter` 配置片段
-- 推荐 agent 提示词
-- 当前使用的服务地址、MCP server 名称、推荐 agent id
-
-### `POST /api/openclaw/resolve`
-
-给 OpenClaw / MCP 用的专用接口。请求体：
-
-```json
-{
-  "input": "小红书分享文案、x.com/twitter.com 链接，或者分享文本",
-  "cookie": "可选",
-  "serviceBaseUrl": "可选，覆盖返回的代理 media URL 根地址；省略时自动使用当前请求地址"
-}
-```
-
-返回：
-
-- `openclaw.text`: 推荐发回 Telegram 的说明文字
-- `openclaw.mediaUrls`: 适合直接交给 Telegram 发送的直链媒体 URL 列表
-- `openclaw.telegramReply`: 可直接原样回发的 Telegram 文本块
-- `note`: 原始解析结果
+返回服务、Telegram 和外部抖音下载器的诊断信息。
 
 ## 本地运行
 
@@ -95,43 +81,10 @@ npm test
 npm start
 ```
 
-默认监听 `http://127.0.0.1:3000`。
-
-浏览器打开：
+默认监听：
 
 ```text
 http://127.0.0.1:3000/
-```
-
-首页右侧有两个配置面板：
-
-- `Telegram Bot 配置`
-- `OpenClaw Agent 接入`
-
-如果网页里的 `OpenClaw 服务地址` 留空，控制台会自动使用你当前访问这个页面的地址，反代或临时换端口时不用手改。
-
-示例：
-
-```bash
-curl -s http://127.0.0.1:3000/healthz
-```
-
-```bash
-curl -s http://127.0.0.1:3000/api/resolve \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "input": "http://xhslink.com/a/your-share-link",
-    "download": false
-  }'
-```
-
-```bash
-curl -s http://127.0.0.1:3000/api/resolve \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "input": "http://xhslink.com/a/your-share-link",
-    "download": true
-  }'
 ```
 
 ## Docker
@@ -156,43 +109,10 @@ docker run -d \
   rednote-downloader
 ```
 
-或者：
-
-```bash
-docker compose up --build
-```
-
-如果你想直接使用 Docker Hub 已发布镜像：
+Docker Hub 镜像：
 
 ```bash
 docker compose -f compose.hub.yaml up -d
-```
-
-`compose.hub.yaml` 当前默认固定到 `icekale/rednote-downloader:v0.2.20`。
-
-如果你是 Unraid 用户，可以直接使用单独的：
-
-```bash
-docker compose -f compose.unraid.yaml up -d
-```
-
-`compose.unraid.yaml` 默认已经按 Unraid 常见场景预填：
-
-- `PUID=99`
-- `PGID=100`
-- `REDNOTE_DATA_DIR=/mnt/user/appdata/rednote`
-
-Docker 默认会把容器内目录拆成：
-
-```text
-/data/downloads
-/data/config
-```
-
-如果你在 NAS 或 Portainer 上部署，建议把 `REDNOTE_DATA_DIR` 设成绝对路径，例如：
-
-```bash
-REDNOTE_DATA_DIR=/volume1/docker/rednote docker compose -f compose.hub.yaml up -d
 ```
 
 Unraid 示例：
@@ -201,169 +121,71 @@ Unraid 示例：
 REDNOTE_DATA_DIR=/mnt/user/appdata/rednote docker compose -f compose.unraid.yaml up -d
 ```
 
-如果你在 Unraid 上部署，除了把数据目录映射到 `/data`，还建议显式设置：
+## 抖音外部下载器
+
+如果只做解析预览，可以直接使用本服务内置抖音单视频解析。若希望服务端下载尽量复用 `jiji262/douyin-downloader`，先启动它的 REST 服务，再给本服务配置：
 
 ```bash
-PUID=99
-PGID=100
+DOUYIN_DOWNLOADER_BASE_URL=http://127.0.0.1:8000
+DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
 ```
 
-这是 Unraid 默认 `nobody:users` 的常见 uid/gid。如果你的 share 使用了别的所有者，请改成和实际目录所有者一致的数字。
+对应环境变量：
+
+- `DOUYIN_DOWNLOADER_BASE_URL`: 外部抖音下载器 REST 地址。
+- `DOUYIN_DOWNLOADER_OUTPUT_DIR`: 外部下载器输出目录，用于代理本地下载结果。
+- `DOUYIN_DOWNLOADER_TIMEOUT_MS`: 可选，等待外部下载任务超时，默认 10 分钟。
+- `DOUYIN_DOWNLOADER_POLL_INTERVAL_MS`: 可选，轮询外部任务间隔，默认 1500ms。
 
 ## Telegram Bot Mode
 
-设置下面的环境变量后，服务启动时会同时拉起一个 Telegram bot 轮询器：
+环境变量：
 
-- `TELEGRAM_BOT_TOKEN`: 你的 Telegram bot token
-- `TELEGRAM_ENABLED`: 可选。设为 `false` / `0` 时，即使环境里或已保存配置里有 token 也不启动轮询器
-- `TELEGRAM_ALLOWED_CHAT_IDS`: 可选，允许使用 bot 的 chat id 列表，逗号分隔
-- `TELEGRAM_DELIVERY_MODE`: `document` 或 `preview`
+- `TELEGRAM_BOT_TOKEN`: Telegram bot token。
+- `TELEGRAM_ENABLED`: 可选，设为 `false` / `0` 时禁用轮询器。
+- `TELEGRAM_ALLOWED_CHAT_IDS`: 可选，允许使用 bot 的 chat id，逗号分隔。
+- `TELEGRAM_DELIVERY_MODE`: `document` 或 `preview`。
 
-推荐：
-
-- `document`: 更适合保留原始文件质量
-- `preview`: 更适合直接在 Telegram 里看图看视频
-
-示例：
-
-```bash
-TELEGRAM_BOT_TOKEN=123456:telegram-token \
-TELEGRAM_ENABLED=true \
-TELEGRAM_ALLOWED_CHAT_IDS=464100862 \
-TELEGRAM_DELIVERY_MODE=document \
-npm start
-```
-
-或者在 `compose.hub.yaml` / `compose.yaml` 对应环境变量里填写。
-
-注意：
-
-- 同一个 Telegram bot token 同时只能有一个长轮询实例；第二个实例会收到 `Conflict: terminated by other getUpdates request`
-- 如果你只是想临时起一个副本做 UI / 鉴权 / API 检查，可以把 `TELEGRAM_ENABLED=false`，避免去抢主实例的轮询
-
-如果你更喜欢在网页里配置 Telegram，可以直接把 Token / chat id 保存到控制台页面。配置文件默认保存在：
-
-```text
-<APP_CONFIG_PATH>
-```
-
-例如 Docker 默认配置文件路径是：
+也可以在网页的 Telegram 标签页保存配置。Docker 默认配置路径：
 
 ```text
 /data/config/.rednote-config.json
 ```
 
-Telegram 轮询状态默认会单独保存在：
-
-```text
-<APP_STATE_PATH>
-```
-
-默认值是：
+Telegram 轮询状态路径：
 
 ```text
 /data/config/.rednote-state.json
 ```
 
-从旧版本升级时，如果你之前把配置保存在下载目录根部，服务启动时会自动把：
+## 环境变量
 
-- `/data/.rednote-config.json`
-- `/data/.rednote-state.json`
-
-复制到新的 `/data/config/` 目录里。
-
-如果旧版本的下载目录直接堆在 `/data` 根目录，服务启动时也会把符合旧命名规则的历史下载目录自动移动到：
-
-```text
-/data/downloads/
-```
-
-如果你计划把管理页暴露到非本机环境，建议同时配置：
-
-- `REDNOTE_ADMIN_TOKEN`: 保护 `/api/config`、`/api/diagnostics`、`/api/openclaw/template`、`/api/telegram/status`
-- `CORS_ALLOWED_ORIGINS`: 需要跨域访问控制台时，显式允许的 Origin 列表，逗号分隔
-
-## OpenClaw Integration
-
-项目内置了一个轻量 MCP server：
-
-```text
-src/mcp-server.js
-```
-
-推荐接法：
-
-1. 启动本服务
-2. 在首页 OpenClaw 面板里填写：
-   - `Service Base URL`
-   - `MCP Server Name`
-   - `Preferred Agent ID`
-   - `宿主机 MCP 脚本路径`
-3. 把页面生成的 `mcporter` 片段加入 OpenClaw 的 MCP 配置
-4. 把页面生成的 agent 提示词补进对应 agent
-
-注意：
-
-- 如果服务跑在 Docker 里，OpenClaw 一般跑在宿主机上，所以 `宿主机 MCP 脚本路径` 要填写宿主机真实路径，例如：
-  `/Users/yourname/path/to/rednote/src/mcp-server.js`
-- MCP server 默认会请求 `REDNOTE_SERVICE_BASE_URL` 对应的 `/api/openclaw/resolve`
-- 工具返回的 `mediaUrls` 已经是适合 Telegram 发送的直链媒体地址
+- `PORT`: 服务端口，默认 `3000`。
+- `HOST`: 监听地址，本机默认 `127.0.0.1`，Docker 默认 `0.0.0.0`。
+- `DOWNLOAD_DIR`: 下载目录，Docker 默认 `/data/downloads`。
+- `APP_CONFIG_PATH`: 配置保存路径，Docker 默认 `/data/config/.rednote-config.json`。
+- `APP_STATE_PATH`: Telegram 状态路径，Docker 默认 `/data/config/.rednote-state.json`。
+- `REDNOTE_DATA_DIR`: 仅 compose 示例使用，宿主机映射到容器 `/data` 的根目录。
+- `PUID` / `PGID`: 仅 compose 示例使用，控制容器写入挂载目录的 uid/gid。
+- `XHS_COOKIE`: 可选，受限小红书页面可尝试带 Cookie。
+- `XHS_USER_AGENT`: 可选，覆盖默认浏览器 UA。
+- `REQUEST_TIMEOUT_MS`: 可选，普通请求超时，默认 `15000`。
+- `BATCH_RESOLVE_CONCURRENCY`: 可选，批量解析并发数，默认 `3`。
+- `MEDIA_DOWNLOAD_CONCURRENCY`: 可选，服务端下载同一帖子多媒体时的并发数，默认 `3`。
+- `MEDIA_DOWNLOAD_RETRY_COUNT`: 可选，同一候选直链重试次数，默认 `1`。
+- `MEDIA_REQUEST_TIMEOUT_MS`: 可选，媒体请求首包超时，默认 `30000`。
+- `REDNOTE_ADMIN_TOKEN`: 可选，设置后管理接口需要 `X-Admin-Token`。
+- `CORS_ALLOWED_ORIGINS`: 可选，额外允许跨域访问管理接口的 Origin，逗号分隔。
 
 ## GitHub Actions Auto Publish
 
-仓库已经预留了 GitHub Actions 自动发布工作流：
+仓库包含：
 
-- 文件位置：`.github/workflows/test.yml`
-- `push` 到 `main` 和 PR 时自动执行 `npm test`
-- 文件位置：`.github/workflows/docker-publish.yml`
-- `push` 到 `main` 时自动推送 `latest`
-- 推送形如 `v0.2.20` 的 tag 时自动推送对应版本标签
-- 同时构建 `linux/amd64` 和 `linux/arm64`
-- 发 GitHub Release 时，建议先检查 [CHANGELOG.md](/Users/kale/Documents/openclaw/rednote/CHANGELOG.md) 里的 `Unreleased` 段，避免遗漏最近修复
+- `.github/workflows/test.yml`: push / PR 时运行语法检查和测试。
+- `.github/workflows/docker-publish.yml`: push 到 `main` 发布 `latest`，推送 `v*` tag 发布版本标签。
+- Docker 构建平台：`linux/amd64` 和 `linux/arm64`。
 
-在 GitHub 仓库里补两个 Actions secrets 即可启用：
+需要仓库 secrets：
 
 - `DOCKERHUB_USERNAME`
 - `DOCKERHUB_TOKEN`
-
-建议 `DOCKERHUB_TOKEN` 使用 Docker Hub 的 Access Token，而不是账户密码。
-
-## 环境变量
-
-- `PORT`: 服务端口，默认 `3000`
-- `HOST`: 监听地址，本机默认 `127.0.0.1`，Docker 默认 `0.0.0.0`
-- `DOWNLOAD_DIR`: 下载目录，默认 `/data/downloads`（Docker 内）
-- `APP_CONFIG_PATH`: 可选。图形化配置保存路径，Docker 默认 `/data/config/.rednote-config.json`
-- `APP_STATE_PATH`: 可选。Telegram 轮询状态保存路径，Docker 默认 `/data/config/.rednote-state.json`
-- `REDNOTE_DATA_DIR`: 仅 compose 示例使用。宿主机映射到容器 `/data` 的根目录；NAS 建议使用绝对路径
-- `PUID` / `PGID`: 仅 compose 示例使用。控制容器以哪个宿主机 uid/gid 写入挂载目录，默认 `1000:1000`
-- `XHS_COOKIE`: 可选。公开页面被风控时可以尝试带上浏览器 Cookie
-- `XHS_USER_AGENT`: 可选。覆盖默认浏览器 UA
-- `REQUEST_TIMEOUT_MS`: 可选。请求超时，默认 `15000`
-- `BATCH_RESOLVE_CONCURRENCY`: 可选。批量解析多个链接时的并发数，默认 `3`
-- `MEDIA_DOWNLOAD_CONCURRENCY`: 可选。服务端下载同一帖子多媒体时的并发数，默认 `3`
-- `MEDIA_DOWNLOAD_RETRY_COUNT`: 可选。媒体下载遇到瞬时断流时，对同一候选直链重试的次数，默认 `1`
-- `MEDIA_REQUEST_TIMEOUT_MS`: 可选。媒体请求的首包超时，默认 `30000`
-- `TELEGRAM_ENABLED`: 可选。设为 `false` / `0` 时禁用 Telegram 轮询器；默认只要环境或已保存配置里有 token 就启用
-- `TELEGRAM_BOT_TOKEN`: 可选。启用 Telegram bot 模式
-- `TELEGRAM_ALLOWED_CHAT_IDS`: 可选。允许的 Telegram chat id，逗号分隔
-- `TELEGRAM_DELIVERY_MODE`: 可选。`document` 或 `preview`，默认 `document`
-- `REDNOTE_ADMIN_TOKEN`: 可选。设置后，管理接口需要携带 `X-Admin-Token`
-- `CORS_ALLOWED_ORIGINS`: 可选。额外允许跨域调用的 Origin，逗号分隔；默认只允许同源页面
-
-## 目录结构
-
-```text
-.
-├── Dockerfile
-├── README.md
-├── compose.yaml
-├── compose.hub.yaml
-├── compose.unraid.yaml
-├── package.json
-├── src
-│   ├── server.js
-│   └── xhs.js
-└── test
-    └── xhs.test.js
-```

@@ -24,41 +24,12 @@ test('sanitizeAppConfig applies defaults and trims fields', () => {
       allowedChatIds: ' 1, 2 ',
       deliveryMode: 'preview',
     },
-    openclaw: {
-      serviceBaseUrl: ' http://localhost:3000/test ',
-      mcpServerName: ' custom-rednote ',
-      toolName: ' resolve_note ',
-      preferredAgentId: ' bfxia ',
-      mcpScriptPath: ' /Users/demo/rednote/src/mcp-server.js ',
-    },
   });
 
   assert.equal(result.telegram.botToken, 'abc123');
   assert.equal(result.telegram.deliveryMode, 'preview');
-  assert.equal(result.openclaw.serviceBaseUrl, 'http://localhost:3000');
-  assert.equal(result.openclaw.mcpServerName, 'custom-rednote');
-  assert.equal(result.openclaw.toolName, 'resolve_note');
-  assert.equal(result.openclaw.mcpScriptPath, '/Users/demo/rednote/src/mcp-server.js');
-});
-
-test('sanitizeAppConfig keeps an empty OpenClaw service base url so the server can auto-detect origin', () => {
-  const result = sanitizeAppConfig({
-    openclaw: {
-      serviceBaseUrl: '   ',
-    },
-  });
-
-  assert.equal(result.openclaw.serviceBaseUrl, '');
-});
-
-test('sanitizeAppConfig drops invalid OpenClaw service base urls back to auto-detect mode', () => {
-  const result = sanitizeAppConfig({
-    openclaw: {
-      serviceBaseUrl: 'not-a-url',
-    },
-  });
-
-  assert.equal(result.openclaw.serviceBaseUrl, '');
+  assert.equal(result.openclaw, undefined);
+  assert.equal(result.hermes, undefined);
 });
 
 test('mergeAppConfig preserves unspecified existing secrets', () => {
@@ -68,12 +39,6 @@ test('mergeAppConfig preserves unspecified existing secrets', () => {
       botToken: 'secret-token',
       allowedChatIds: '1',
       deliveryMode: 'document',
-    },
-    openclaw: {
-      serviceBaseUrl: 'http://127.0.0.1:3000',
-      mcpServerName: 'rednote',
-      toolName: 'resolve_rednote_media',
-      preferredAgentId: 'bfxia',
     },
   }, {
     telegram: {
@@ -93,16 +58,12 @@ test('getPublicConfig masks stored telegram token', () => {
       allowedChatIds: '',
       deliveryMode: 'document',
     },
-    openclaw: {
-      serviceBaseUrl: 'http://127.0.0.1:3000',
-      mcpServerName: 'rednote',
-      toolName: 'resolve_rednote_media',
-      preferredAgentId: 'bfxia',
-    },
   });
 
   assert.equal(result.telegram.botTokenSet, true);
   assert.match(result.telegram.botTokenMasked, /^1234\*\*\*cdef$/);
+  assert.equal(result.openclaw, undefined);
+  assert.equal(result.hermes, undefined);
 });
 
 test('sanitizeAppState keeps a non-negative telegram offset', () => {

@@ -5,6 +5,8 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { inferMediaFileName, deriveNoteFileStem, sanitizeFileName } from './shared/media-filenames.js';
 import { mapWithConcurrency, normalizePositiveInt } from './async-utils.js';
+import { isDouyinMediaHost, isDouyinShareHost, resolveDouyinNote } from './douyin.js';
+import { downloadDouyinViaExternalService } from './douyin-external.js';
 
 const XHS_SHARE_HOSTS = new Set([
   'xhslink.com',
@@ -25,6 +27,13 @@ const MEDIA_HOST_SUFFIXES = [
   '.xhscdn.com',
   '.xiaohongshu.com',
   '.twimg.com',
+  '.douyin.com',
+  '.douyinvod.com',
+  '.douyinpic.com',
+  '.douyinstatic.com',
+  '.byteimg.com',
+  '.bytedance.com',
+  '.bytedanceapi.com',
 ];
 
 const DEFAULT_TIMEOUT_MS = Number.parseInt(process.env.REQUEST_TIMEOUT_MS || '15000', 10);
@@ -108,7 +117,7 @@ export function withWritablePathHint(error, targetPath) {
 }
 
 function isAllowedShareHost(hostname) {
-  return XHS_SHARE_HOSTS.has(hostname) || TWITTER_SHARE_HOSTS.has(hostname);
+  return XHS_SHARE_HOSTS.has(hostname) || TWITTER_SHARE_HOSTS.has(hostname) || isDouyinShareHost(hostname);
 }
 
 function isTwitterShareHost(hostname) {
@@ -116,7 +125,7 @@ function isTwitterShareHost(hostname) {
 }
 
 function isAllowedMediaHost(hostname) {
-  return MEDIA_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+  return MEDIA_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix)) || isDouyinMediaHost(hostname);
 }
 
 function ensureAllowedShareUrl(input) {
@@ -300,17 +309,24 @@ function buildHeaders(target, cookie) {
   const hostname = target
     ? (target instanceof URL ? target.hostname : new URL(target).hostname)
     : 'www.xiaohongshu.com';
-  const referer = hostname.endsWith('.twimg.com') || isTwitterShareHost(hostname)
+  const referer = isDouyinMediaHost(hostname)
+    ? 'https://www.douyin.com/'
+    : hostname.endsWith('.twimg.com') || isTwitterShareHost(hostname)
     ? 'https://x.com/'
     : 'https://www.xiaohongshu.com/';
-
-  return {
+  const headers = {
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     Referer: referer,
     'User-Agent': process.env.XHS_USER_AGENT || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
     ...(cookie && !hostname.endsWith('.twimg.com') && !isTwitterShareHost(hostname) ? { Cookie: cookie } : {}),
   };
+
+  if (isDouyinMediaHost(hostname)) {
+    headers.Origin = 'https://www.douyin.com';
+  }
+
+  return headers;
 }
 
 function extractRedirectUrlFromHtml(html, currentUrl) {
@@ -686,6 +702,8 @@ async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, re
         const resolved = await fetchMediaResponse(candidate, {
           cookie,
           timeoutMs,
+          headers: item.headers,
+          useDefaultCookie: false,
         });
         const { url, response } = resolved;
         const extension = inferExtension(url.toString(), response.headers.get('content-type'), item.type === 'video' ? 'mp4' : 'jpg');
@@ -723,9 +741,13 @@ async function downloadOneMedia(item, outputDir, baseName, cookie, timeoutMs, re
 
 export async function fetchMediaResponse(input, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_MEDIA_TIMEOUT_MS;
-  const cookie = options.cookie || process.env.XHS_COOKIE;
   const extraHeaders = options.headers && typeof options.headers === 'object' ? options.headers : {};
   const url = ensureAllowedMediaUrl(input);
+  const cookie = typeof options.cookie === 'string'
+    ? options.cookie
+    : options.useDefaultCookie === false || isDouyinMediaHost(url.hostname)
+      ? ''
+      : process.env.XHS_COOKIE;
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => {
     controller.abort(new Error(`Media request timed out after ${timeoutMs}ms`));
@@ -790,6 +812,10 @@ export async function downloadMedia(media, noteTitle, noteId, downloadDir, optio
 export async function resolveNote(input, options = {}) {
   const shareUrl = ensureAllowedShareUrl(extractFirstUrl(input));
 
+  if (isDouyinShareHost(shareUrl.hostname)) {
+    return resolveDouyinNote(input, options);
+  }
+
   if (isTwitterShareHost(shareUrl.hostname)) {
     const { resolvedUrl, payload } = await fetchTweetData(input, options);
     const parsed = parseTweetFromApiPayload(payload, resolvedUrl);
@@ -815,3 +841,5 @@ export async function resolveNote(input, options = {}) {
     warnings,
   };
 }
+
+export { downloadDouyinViaExternalService, isDouyinShareHost };
