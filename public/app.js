@@ -1,10 +1,17 @@
-import { COOKIE_STORAGE_KEY, parseCookieText } from './cookie-utils.js';
+import {
+  COOKIE_STORAGE_KEY,
+  DOUYIN_COOKIE_STORAGE_KEY,
+  XHS_COOKIE_STORAGE_KEY,
+  parseCookieText,
+} from './cookie-utils.js';
 import { inferMediaFileName } from '/media-filenames.js';
 
 const form = document.querySelector('#resolve-form');
 const input = document.querySelector('#input');
 const serverDownload = document.querySelector('#server-download');
-const cookieInput = document.querySelector('#cookie-input');
+const xhsCookieInput = document.querySelector('#xhs-cookie-input');
+const douyinCookieInput = document.querySelector('#douyin-cookie-input');
+const cookieImportTarget = document.querySelector('#cookie-import-target');
 const cookieDropzone = document.querySelector('#cookie-dropzone');
 const cookieFileInput = document.querySelector('#cookie-file');
 const cookieStatusEl = document.querySelector('#cookie-status');
@@ -69,9 +76,14 @@ const TRANSLATIONS = {
     'cookie.summary.title': '可选 Cookie',
     'cookie.summary.hint': '仅在受限帖子时再填写',
     'cookie.title': '解析鉴权',
-    'cookie.note': 'Cookie 只保存在当前浏览器。大多数公开小红书、X 或抖音单视频不用填，失败时再补就够了。',
-    'cookie.header': 'Cookie Header',
-    'cookie.placeholder': '可直接粘贴 Cookie header，也可以拖入 cookies.txt / JSON',
+    'cookie.note': 'Cookie 只保存在当前浏览器。小红书和抖音分开填写，批量混合链接时会按平台自动选择。',
+    'cookie.xhsHeader': '小红书 Cookie Header',
+    'cookie.xhsPlaceholder': '粘贴小红书 Cookie header，或用 XHS_COOKIE 环境变量长期保存',
+    'cookie.douyinHeader': '抖音 Cookie Header',
+    'cookie.douyinPlaceholder': '粘贴抖音 Cookie header，或用 DOUYIN_COOKIE 环境变量长期保存',
+    'cookie.importTarget': '导入到',
+    'cookie.importTarget.xhs': '小红书 Cookie',
+    'cookie.importTarget.douyin': '抖音 Cookie',
     'cookie.dropzone.aria': '拖拽导入 Cookie 文件',
     'cookie.dropzone.title': '拖拽 cookies.txt、JSON，或纯文本 Cookie 到这里',
     'cookie.dropzone.sub': '也可以点击这里选择文件',
@@ -123,12 +135,12 @@ const TRANSLATIONS = {
     'status.resolveBatchDownloadDone': '批量服务端下载完成，成功 {successCount}/{totalCount} 条，累计 {mediaCount} 个媒体文件。',
     'status.downloadAllPartial': '已开始下载 {successCount} 个文件，失败 {failureCount} 个：{firstFailure}',
     'status.downloadAllDone': '已开始下载 {successCount} 个文件。',
-    'cookie.status.none': '当前没有保存 Cookie。',
+    'cookie.status.none': '当前没有保存小红书或抖音 Cookie。',
     'cookie.status.restored': '已从本地浏览器恢复保存的 Cookie。',
     'cookie.status.removed': '输入为空，已移除本地保存的 Cookie。',
     'cookie.status.saved': 'Cookie 已保存到当前浏览器。',
-    'cookie.status.cleared': 'Cookie 已清空。',
-    'cookie.status.imported': '已导入 {fileName}。',
+    'cookie.status.cleared': '小红书和抖音 Cookie 已清空。',
+    'cookie.status.imported': '已导入 {fileName} 到 {target}。',
     'download.summary.title': '服务端下载完成',
     'download.summary.path': '保存路径：',
     'download.summary.external': '外部下载器：',
@@ -145,6 +157,7 @@ const TRANSLATIONS = {
     'diagnostics.line.delivery': 'delivery',
     'diagnostics.line.allowlist': 'allowlist',
     'diagnostics.line.provider': 'provider',
+    'diagnostics.line.cookie': 'cookie',
     'diagnostics.line.baseUrl': 'base URL',
     'diagnostics.value.enabled': 'yes',
     'diagnostics.value.disabled': 'no',
@@ -191,9 +204,14 @@ const TRANSLATIONS = {
     'cookie.summary.title': 'Optional Cookie',
     'cookie.summary.hint': 'Only fill this for restricted posts',
     'cookie.title': 'Request Auth',
-    'cookie.note': 'Cookies are stored only in this browser. Most public Xiaohongshu, X, or Douyin single-video links do not need them, so add one only if parsing fails.',
-    'cookie.header': 'Cookie Header',
-    'cookie.placeholder': 'Paste a Cookie header, or drop in cookies.txt / JSON',
+    'cookie.note': 'Cookies are stored only in this browser. Xiaohongshu and Douyin are separate; mixed batches automatically use the matching platform cookie.',
+    'cookie.xhsHeader': 'Xiaohongshu Cookie Header',
+    'cookie.xhsPlaceholder': 'Paste a Xiaohongshu Cookie header, or persist it with XHS_COOKIE',
+    'cookie.douyinHeader': 'Douyin Cookie Header',
+    'cookie.douyinPlaceholder': 'Paste a Douyin Cookie header, or persist it with DOUYIN_COOKIE',
+    'cookie.importTarget': 'Import Into',
+    'cookie.importTarget.xhs': 'Xiaohongshu Cookie',
+    'cookie.importTarget.douyin': 'Douyin Cookie',
     'cookie.dropzone.aria': 'Drop a cookie file here',
     'cookie.dropzone.title': 'Drop cookies.txt, JSON, or plain text cookies here',
     'cookie.dropzone.sub': 'Or click here to choose a file',
@@ -245,12 +263,12 @@ const TRANSLATIONS = {
     'status.resolveBatchDownloadDone': 'Batch server-side download finished with {successCount}/{totalCount} posts succeeded and {mediaCount} media file(s) processed.',
     'status.downloadAllPartial': 'Started {successCount} download(s), with {failureCount} failure(s): {firstFailure}',
     'status.downloadAllDone': 'Started {successCount} download(s).',
-    'cookie.status.none': 'No saved cookie is stored in this browser.',
+    'cookie.status.none': 'No Xiaohongshu or Douyin cookie is stored in this browser.',
     'cookie.status.restored': 'Restored the saved cookie from this browser.',
     'cookie.status.removed': 'The input is empty, so the saved cookie has been removed.',
     'cookie.status.saved': 'Cookie saved in this browser.',
-    'cookie.status.cleared': 'Cookie cleared.',
-    'cookie.status.imported': 'Imported {fileName}.',
+    'cookie.status.cleared': 'Xiaohongshu and Douyin cookies cleared.',
+    'cookie.status.imported': 'Imported {fileName} into {target}.',
     'download.summary.title': 'Server-side download completed',
     'download.summary.path': 'Saved path:',
     'download.summary.external': 'External downloader:',
@@ -267,6 +285,7 @@ const TRANSLATIONS = {
     'diagnostics.line.delivery': 'delivery',
     'diagnostics.line.allowlist': 'allowlist',
     'diagnostics.line.provider': 'provider',
+    'diagnostics.line.cookie': 'cookie',
     'diagnostics.line.baseUrl': 'base URL',
     'diagnostics.value.enabled': 'yes',
     'diagnostics.value.disabled': 'no',
@@ -606,30 +625,53 @@ async function downloadProxyMedia(entry, options = {}) {
 }
 
 function loadSavedCookie() {
-  const saved = window.localStorage.getItem(COOKIE_STORAGE_KEY);
-  if (!saved) {
+  const legacyCookie = window.localStorage.getItem(COOKIE_STORAGE_KEY) || '';
+  const savedXhsCookie = window.localStorage.getItem(XHS_COOKIE_STORAGE_KEY) || legacyCookie;
+  const savedDouyinCookie = window.localStorage.getItem(DOUYIN_COOKIE_STORAGE_KEY) || '';
+
+  if (!savedXhsCookie && !savedDouyinCookie) {
     setCookieStatus(t('cookie.status.none'));
     return;
   }
 
-  cookieInput.value = saved;
+  xhsCookieInput.value = savedXhsCookie;
+  douyinCookieInput.value = savedDouyinCookie;
   setCookieStatus(t('cookie.status.restored'));
 }
 
 function saveCookieLocally() {
-  const value = cookieInput.value.trim();
-  if (!value) {
+  const xhsCookie = xhsCookieInput.value.trim();
+  const douyinCookie = douyinCookieInput.value.trim();
+  if (!xhsCookie && !douyinCookie) {
+    window.localStorage.removeItem(XHS_COOKIE_STORAGE_KEY);
+    window.localStorage.removeItem(DOUYIN_COOKIE_STORAGE_KEY);
     window.localStorage.removeItem(COOKIE_STORAGE_KEY);
     setCookieStatus(t('cookie.status.removed'));
     return;
   }
 
-  window.localStorage.setItem(COOKIE_STORAGE_KEY, value);
+  if (xhsCookie) {
+    window.localStorage.setItem(XHS_COOKIE_STORAGE_KEY, xhsCookie);
+    window.localStorage.setItem(COOKIE_STORAGE_KEY, xhsCookie);
+  } else {
+    window.localStorage.removeItem(XHS_COOKIE_STORAGE_KEY);
+    window.localStorage.removeItem(COOKIE_STORAGE_KEY);
+  }
+
+  if (douyinCookie) {
+    window.localStorage.setItem(DOUYIN_COOKIE_STORAGE_KEY, douyinCookie);
+  } else {
+    window.localStorage.removeItem(DOUYIN_COOKIE_STORAGE_KEY);
+  }
+
   setCookieStatus(t('cookie.status.saved'), false);
 }
 
 function clearCookieLocally() {
-  cookieInput.value = '';
+  xhsCookieInput.value = '';
+  douyinCookieInput.value = '';
+  window.localStorage.removeItem(XHS_COOKIE_STORAGE_KEY);
+  window.localStorage.removeItem(DOUYIN_COOKIE_STORAGE_KEY);
   window.localStorage.removeItem(COOKIE_STORAGE_KEY);
   setCookieStatus(t('cookie.status.cleared'));
 }
@@ -637,9 +679,14 @@ function clearCookieLocally() {
 async function importCookieFile(file) {
   const content = await file.text();
   const parsed = parseCookieText(content);
-  cookieInput.value = parsed;
+  const targetInput = cookieImportTarget.value === 'douyin' ? douyinCookieInput : xhsCookieInput;
+  targetInput.value = parsed;
   saveCookieLocally();
-  setCookieStatus(t('cookie.status.imported', { fileName: file.name }));
+  const targetLabel = cookieImportTarget.selectedOptions?.[0]?.textContent || cookieImportTarget.value;
+  setCookieStatus(t('cookie.status.imported', {
+    fileName: file.name,
+    target: targetLabel,
+  }));
 }
 
 function renderWarnings(container, warningItems) {
@@ -908,6 +955,7 @@ function renderDiagnosticsCards(diagnostics) {
       title: t('diagnostics.card.douyin'),
       lines: [
         `${t('diagnostics.line.enabled')}: ${diagnostics.douyin?.externalConfigured ? t('diagnostics.value.enabled') : t('diagnostics.value.disabled')}`,
+        `${t('diagnostics.line.cookie')}: ${diagnostics.douyin?.cookieConfigured ? t('diagnostics.value.enabled') : t('diagnostics.value.disabled')}`,
         `${t('diagnostics.line.provider')}: ${diagnostics.douyin?.provider || 'jiji262/douyin-downloader'}`,
         `${t('diagnostics.line.baseUrl')}: ${diagnostics.douyin?.baseUrl || t('diagnostics.value.missing')}`,
       ],
@@ -992,7 +1040,8 @@ async function onSubmit(event) {
       body: JSON.stringify({
         input: input.value,
         download: serverDownload.checked,
-        cookie: cookieInput.value.trim() || undefined,
+        xhsCookie: xhsCookieInput.value.trim() || undefined,
+        douyinCookie: douyinCookieInput.value.trim() || undefined,
       }),
     });
 

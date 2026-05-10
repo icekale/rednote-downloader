@@ -94,15 +94,36 @@
                   <p class="section-note" data-i18n="cookie.note">Cookie 只保存在当前浏览器。大多数公开帖子不用填，失败时再补就够了。</p>
                 </div>
 
-                <label class="field">
-                  <span data-i18n="cookie.header">Cookie Header</span>
-                  <textarea
-                    id="cookie-input"
-                    name="cookie"
-                    rows="4"
-                    placeholder="可直接粘贴 Cookie header，也可以拖入 cookies.txt / JSON"
-                    data-i18n-placeholder="cookie.placeholder"
-                  ></textarea>
+                <div class="cookie-grid">
+                  <label class="field">
+                    <span data-i18n="cookie.xhsHeader">小红书 Cookie Header</span>
+                    <textarea
+                      id="xhs-cookie-input"
+                      name="xhsCookie"
+                      rows="4"
+                      placeholder="粘贴小红书 Cookie header"
+                      data-i18n-placeholder="cookie.xhsPlaceholder"
+                    ></textarea>
+                  </label>
+
+                  <label class="field">
+                    <span data-i18n="cookie.douyinHeader">抖音 Cookie Header</span>
+                    <textarea
+                      id="douyin-cookie-input"
+                      name="douyinCookie"
+                      rows="4"
+                      placeholder="粘贴抖音 Cookie header"
+                      data-i18n-placeholder="cookie.douyinPlaceholder"
+                    ></textarea>
+                  </label>
+                </div>
+
+                <label class="field compact-field">
+                  <span data-i18n="cookie.importTarget">导入到</span>
+                  <select id="cookie-import-target">
+                    <option value="xhs" data-i18n="cookie.importTarget.xhs">小红书 Cookie</option>
+                    <option value="douyin" data-i18n="cookie.importTarget.douyin">抖音 Cookie</option>
+                  </select>
                 </label>
 
                 <div id="cookie-dropzone" class="dropzone" tabindex="0" role="button" aria-label="拖拽导入 Cookie 文件" data-i18n-aria-label="cookie.dropzone.aria">
@@ -259,7 +280,7 @@
 
       <footer class="site-footer" aria-label="项目元信息" data-i18n-aria-label="footer.aria">
         <div class="site-footer-inner">
-          <span id="footer-version" class="footer-item">v0.2.21</span>
+          <span id="footer-version" class="footer-item">v0.2.22</span>
           <span class="footer-separator" aria-hidden="true"></span>
           <a
             class="footer-link"

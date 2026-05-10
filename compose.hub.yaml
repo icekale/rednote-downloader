@@ -1,6 +1,6 @@
 services:
   rednote-downloader:
-    image: icekale/rednote-downloader:v0.2.21
+    image: icekale/rednote-downloader:v0.2.22
     container_name: rednote-downloader
     ports:
       - "3000:3000"
@@ -14,6 +14,7 @@ services:
       APP_STATE_PATH: /data/config/.rednote-state.json
       XHS_COOKIE: ${XHS_COOKIE:-}
       XHS_USER_AGENT: ${XHS_USER_AGENT:-}
+      DOUYIN_COOKIE: ${DOUYIN_COOKIE:-}
       DOUYIN_DOWNLOADER_BASE_URL: ${DOUYIN_DOWNLOADER_BASE_URL:-}
       DOUYIN_DOWNLOADER_OUTPUT_DIR: ${DOUYIN_DOWNLOADER_OUTPUT_DIR:-}
       DOUYIN_DOWNLOADER_TIMEOUT_MS: ${DOUYIN_DOWNLOADER_TIMEOUT_MS:-600000}

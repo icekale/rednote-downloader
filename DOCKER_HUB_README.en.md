@@ -22,7 +22,7 @@ docker run -d \
   -e PUID="$(id -u)" \
   -e PGID="$(id -g)" \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.21
+  icekale/rednote-downloader:v0.2.22
 ```
 
 Then open:
@@ -37,6 +37,7 @@ http://127.0.0.1:3000/
 - `APP_CONFIG_PATH`: app config path, default `/data/config/.rednote-config.json`
 - `APP_STATE_PATH`: Telegram polling state path, default `/data/config/.rednote-state.json`
 - `XHS_COOKIE`: optional Cookie header for protected RedNote posts
+- `DOUYIN_COOKIE`: optional Cookie header for protected Douyin single-video resolving or external Douyin downloads
 - `DOUYIN_DOWNLOADER_BASE_URL`: optional external Douyin downloader REST URL
 - `DOUYIN_DOWNLOADER_OUTPUT_DIR`: optional external Douyin downloader output directory
 - `TELEGRAM_ENABLED`: optional; set to `false` / `0` to disable Telegram polling
@@ -50,5 +51,5 @@ http://127.0.0.1:3000/
 - Douyin support is single-video only in this release.
 - "No watermark" means the service prefers no-watermark or low-watermark sources returned by the platform. It does not perform image-level watermark removal.
 - No transcoding, recompression, or watermarking is applied.
-- Cookies are not baked into the image. Pass them at runtime through the UI or environment.
+- Cookies are not baked into the image. Pass them at runtime through the UI or environment. Use `XHS_COOKIE` for Xiaohongshu and `DOUYIN_COOKIE` for Douyin.
 - A Telegram bot token can only be long-polled by one running instance at a time.

@@ -1,4 +1,6 @@
 export const COOKIE_STORAGE_KEY = 'rednote-downloader.cookie';
+export const XHS_COOKIE_STORAGE_KEY = 'rednote-downloader.cookie.xhs';
+export const DOUYIN_COOKIE_STORAGE_KEY = 'rednote-downloader.cookie.douyin';
 
 function normalizeLineEndings(text) {
   return String(text || '').replace(/\r\n/g, '\n').trim();

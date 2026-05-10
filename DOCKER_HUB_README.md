@@ -22,7 +22,7 @@ docker run -d \
   -e PUID="$(id -u)" \
   -e PGID="$(id -g)" \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.21
+  icekale/rednote-downloader:v0.2.22
 ```
 
 启动后打开：
@@ -37,6 +37,7 @@ http://127.0.0.1:3000/
 - `APP_CONFIG_PATH`: 配置文件路径，默认 `/data/config/.rednote-config.json`
 - `APP_STATE_PATH`: Telegram 轮询状态路径，默认 `/data/config/.rednote-state.json`
 - `XHS_COOKIE`: 可选，给受限小红书帖子补 Cookie
+- `DOUYIN_COOKIE`: 可选，给受限抖音单视频解析或外部抖音下载补 Cookie
 - `DOUYIN_DOWNLOADER_BASE_URL`: 可选，外部抖音下载器 REST 地址
 - `DOUYIN_DOWNLOADER_OUTPUT_DIR`: 可选，外部抖音下载器输出目录
 - `TELEGRAM_ENABLED`: 可选，设为 `false` / `0` 时禁用 Telegram 轮询器
@@ -50,5 +51,5 @@ http://127.0.0.1:3000/
 - 抖音第一版只支持单视频。
 - “去水印”是优先使用平台返回的无水印或低水印源，不做图像级水印擦除。
 - 不会转码、压缩或重新加水印。
-- Cookie 不会写入镜像，需要运行时通过 UI 或环境变量传入。
+- Cookie 不会写入镜像，需要运行时通过 UI 或环境变量传入。小红书用 `XHS_COOKIE`，抖音用 `DOUYIN_COOKIE`。
 - 同一个 Telegram bot token 同时只能有一个长轮询实例。

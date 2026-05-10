@@ -71,6 +71,7 @@ test('GET /api/diagnostics includes external Douyin downloader status', async (t
   const { origin } = await startTestApp(t, {
     env: {
       DOUYIN_DOWNLOADER_BASE_URL: 'http://127.0.0.1:8000',
+      DOUYIN_COOKIE: 'douyin-env-cookie=1',
     },
   });
 
@@ -80,6 +81,7 @@ test('GET /api/diagnostics includes external Douyin downloader status', async (t
 
   assert.equal(data.ok, true);
   assert.equal(data.diagnostics.douyin.externalConfigured, true);
+  assert.equal(data.diagnostics.douyin.cookieConfigured, true);
   assert.equal(data.diagnostics.douyin.baseUrl, 'http://127.0.0.1:8000');
   assert.equal(typeof data.diagnostics.checks.douyinDownloaderHealth.ok, 'boolean');
 });
@@ -128,12 +130,118 @@ test('POST /api/resolve returns the existing response shape for a Douyin single 
   assert.equal(data.download, undefined);
 });
 
+test('POST /api/resolve uses the Douyin-specific cookie field for Douyin inputs', async (t) => {
+  const { origin } = await startTestApp(t, {
+    dependencies: {
+      resolveNote: async (input, options) => {
+        assert.equal(input, 'https://www.douyin.com/video/7321234567890123456');
+        assert.equal(options.cookie, 'douyin-cookie=1');
+        return {
+          resolvedUrl: input,
+          noteId: '7321234567890123456',
+          title: 'Douyin Video',
+          description: '',
+          type: 'video',
+          author: null,
+          media: [{ index: 1, type: 'video', url: 'https://v3.douyinvod.com/video.mp4' }],
+          warnings: [],
+        };
+      },
+    },
+  });
+
+  const response = await fetch(`${origin}/api/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      input: 'https://www.douyin.com/video/7321234567890123456',
+      xhsCookie: 'xhs-cookie=1',
+      douyinCookie: 'douyin-cookie=1',
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.ok, true);
+});
+
+test('POST /api/resolve falls back to DOUYIN_COOKIE for Douyin inputs', async (t) => {
+  const { origin } = await startTestApp(t, {
+    env: {
+      DOUYIN_COOKIE: 'douyin-env-cookie=1',
+    },
+    dependencies: {
+      resolveNote: async (input, options) => {
+        assert.equal(input, 'https://www.douyin.com/video/7321234567890123456');
+        assert.equal(options.cookie, 'douyin-env-cookie=1');
+        return {
+          resolvedUrl: input,
+          noteId: '7321234567890123456',
+          title: 'Douyin Video',
+          description: '',
+          type: 'video',
+          author: null,
+          media: [{ index: 1, type: 'video', url: 'https://v3.douyinvod.com/video.mp4' }],
+          warnings: [],
+        };
+      },
+    },
+  });
+
+  const response = await fetch(`${origin}/api/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      input: 'https://www.douyin.com/video/7321234567890123456',
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.ok, true);
+});
+
+test('POST /api/resolve uses the Xiaohongshu-specific cookie field for non-Douyin inputs', async (t) => {
+  const { origin } = await startTestApp(t, {
+    dependencies: {
+      resolveNote: async (input, options) => {
+        assert.equal(input, 'https://www.xiaohongshu.com/explore/xhs-note');
+        assert.equal(options.cookie, 'xhs-cookie=1');
+        return {
+          resolvedUrl: input,
+          noteId: 'xhs-note',
+          title: 'XHS Note',
+          description: '',
+          type: 'image',
+          author: null,
+          media: [{ index: 1, type: 'image', url: 'https://ci.xiaohongshu.com/image.jpg' }],
+          warnings: [],
+        };
+      },
+    },
+  });
+
+  const response = await fetch(`${origin}/api/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      input: 'https://www.xiaohongshu.com/explore/xhs-note',
+      xhsCookie: 'xhs-cookie=1',
+      douyinCookie: 'douyin-cookie=1',
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.ok, true);
+});
+
 test('POST /api/resolve supports mixed batch inputs including Douyin URLs', async (t) => {
   const seen = [];
   const { origin } = await startTestApp(t, {
     dependencies: {
-      resolveNote: async (input) => {
-        seen.push(input);
+      resolveNote: async (input, options) => {
+        seen.push({ input, cookie: options.cookie });
         return {
           resolvedUrl: input,
           noteId: input.includes('douyin') ? '7321234567890123456' : 'xhs-note',
@@ -156,6 +264,8 @@ test('POST /api/resolve supports mixed batch inputs including Douyin URLs', asyn
         'https://www.xiaohongshu.com/explore/xhs-note',
         'https://www.douyin.com/video/7321234567890123456',
       ].join('\n'),
+      xhsCookie: 'xhs-cookie=1',
+      douyinCookie: 'douyin-cookie=1',
     }),
   });
   assert.equal(response.status, 200);
@@ -165,8 +275,8 @@ test('POST /api/resolve supports mixed batch inputs including Douyin URLs', asyn
   assert.equal(data.batch, true);
   assert.equal(data.results.length, 2);
   assert.deepEqual(seen, [
-    'https://www.xiaohongshu.com/explore/xhs-note',
-    'https://www.douyin.com/video/7321234567890123456',
+    { input: 'https://www.xiaohongshu.com/explore/xhs-note', cookie: 'xhs-cookie=1' },
+    { input: 'https://www.douyin.com/video/7321234567890123456', cookie: 'douyin-cookie=1' },
   ]);
 });
 

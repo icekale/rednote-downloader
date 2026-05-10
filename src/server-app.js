@@ -438,6 +438,23 @@ export async function createRednoteApp(options = {}) {
     }
   }
 
+  function normalizeCookieValue(value) {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  function selectRequestCookie(input, body) {
+    const legacyCookie = normalizeCookieValue(body.cookie);
+    if (isDouyinInput(input)) {
+      return normalizeCookieValue(body.douyinCookie)
+        || legacyCookie
+        || normalizeCookieValue(settings.env.DOUYIN_COOKIE);
+    }
+
+    return normalizeCookieValue(body.xhsCookie)
+      || legacyCookie
+      || normalizeCookieValue(settings.env.XHS_COOKIE);
+  }
+
   function buildExternalDouyinDownloadNote(input, downloaded) {
     return downloaded.note || {
       resolvedUrl: input,
@@ -486,12 +503,13 @@ export async function createRednoteApp(options = {}) {
     const externalDouyinConfig = buildExternalDouyinConfig(settings.env);
     const useExternalDouyinDownload = isDouyinInput(resolvedInput)
       && isExternalDouyinConfigured(externalDouyinConfig);
+    const cookie = selectRequestCookie(resolvedInput, body);
 
     if (useExternalDouyinDownload) {
       const downloaded = await downloadDouyinViaExternalServiceImpl({
         input: resolvedInput,
         config: externalDouyinConfig,
-        cookie: body.cookie,
+        cookie,
       });
 
       return {
@@ -506,7 +524,7 @@ export async function createRednoteApp(options = {}) {
     }
 
     const note = await resolveNoteImpl(resolvedInput, {
-      cookie: body.cookie,
+      cookie,
     });
 
     if (!download) {
@@ -523,7 +541,7 @@ export async function createRednoteApp(options = {}) {
       note.noteId,
       settings.downloadDir,
       {
-        cookie: body.cookie,
+        cookie,
         noteDescription: note.description,
         concurrency: settings.mediaDownloadConcurrency,
       },
@@ -759,6 +777,7 @@ export async function createRednoteApp(options = {}) {
       },
       douyin: {
         externalConfigured: douyinDownloaderConfigured,
+        cookieConfigured: Boolean(normalizeCookieValue(settings.env.DOUYIN_COOKIE)),
         baseUrl: douyinDownloader.baseUrl,
         provider: 'jiji262/douyin-downloader',
       },

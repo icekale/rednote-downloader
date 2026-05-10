@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.22 - 2026-05-10
+
+- Add a dedicated `DOUYIN_COOKIE` environment variable for Unraid/Docker deployments.
+- Split the web UI Cookie auth controls into separate Xiaohongshu and Douyin Cookie fields.
+- Keep the legacy `cookie` request field as a backward-compatible fallback while adding `xhsCookie` and `douyinCookie`.
+
 ## v0.2.21 - 2026-05-10
 
 - Add Douyin single-video resolve/download support for share text, short links, and `douyin.com/video/{aweme_id}` inputs.

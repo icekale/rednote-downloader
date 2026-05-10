@@ -398,6 +398,16 @@ select {
   font-weight: 600;
 }
 
+.cookie-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.compact-field {
+  max-width: 280px;
+}
+
 textarea,
 input,
 select,
@@ -1017,8 +1027,13 @@ select:focus {
   }
 
   .section-grid,
-  .section-grid-wide {
+  .section-grid-wide,
+  .cookie-grid {
     grid-template-columns: 1fr;
+  }
+
+  .compact-field {
+    max-width: none;
   }
 
   .section-head {

@@ -12,7 +12,7 @@ A Docker-first self-hosted media resolver for RedNote/Xiaohongshu, `x.com` / `tw
 - Preview media in the browser and download through the local `/api/media` proxy.
 - Optionally save media to the server download directory.
 - Optionally configure a Telegram bot for media delivery.
-- Reuse the Cookie field as a request-level Cookie header for restricted or anti-bot cases.
+- Separate Xiaohongshu and Douyin Cookie fields in the web UI; Docker/Unraid deployments can also persist them with `XHS_COOKIE` and `DOUYIN_COOKIE`.
 
 ## Boundaries
 
@@ -60,6 +60,7 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
 - `REDNOTE_DATA_DIR`: compose-only host path mounted to `/data`.
 - `PUID` / `PGID`: runtime uid/gid used by the container entrypoint.
 - `XHS_COOKIE`: optional manual Cookie header for protected RedNote posts.
+- `DOUYIN_COOKIE`: optional manual Cookie header for protected Douyin single-video resolving or external Douyin downloads.
 - `XHS_USER_AGENT`: optional custom request user agent.
 - `DOUYIN_DOWNLOADER_BASE_URL`: optional external Douyin downloader REST URL.
 - `DOUYIN_DOWNLOADER_OUTPUT_DIR`: optional external downloader output directory.

@@ -12,7 +12,7 @@
 - 浏览器内预览图片和视频，并通过本地 `/api/media` 代理下载。
 - 可选保存到服务端下载目录。
 - 可选配置 Telegram bot，把解析到的媒体回传到聊天。
-- Cookie 输入框复用为请求级 Cookie，仅在受限内容或风控时填写。
+- Cookie 鉴权分为小红书和抖音两个输入框；Unraid/Docker 也可用 `XHS_COOKIE` 和 `DOUYIN_COOKIE` 分别长期保存。
 
 ## 能力边界
 
@@ -36,7 +36,9 @@
 {
   "input": "小红书、X/Twitter、抖音单视频链接或分享文案",
   "download": true,
-  "cookie": "可选 Cookie header"
+  "xhsCookie": "可选，小红书 Cookie header",
+  "douyinCookie": "可选，抖音 Cookie header",
+  "cookie": "可选，旧版兼容字段"
 }
 ```
 
@@ -104,7 +106,8 @@ docker run -d \
   -p 3000:3000 \
   -e PUID="$(id -u)" \
   -e PGID="$(id -g)" \
-  -e XHS_COOKIE='你的 cookie，可选' \
+  -e XHS_COOKIE='小红书 cookie，可选' \
+  -e DOUYIN_COOKIE='抖音 cookie，可选' \
   -v "$(pwd)/data:/data" \
   rednote-downloader
 ```
@@ -168,6 +171,7 @@ Telegram 轮询状态路径：
 - `REDNOTE_DATA_DIR`: 仅 compose 示例使用，宿主机映射到容器 `/data` 的根目录。
 - `PUID` / `PGID`: 仅 compose 示例使用，控制容器写入挂载目录的 uid/gid。
 - `XHS_COOKIE`: 可选，受限小红书页面可尝试带 Cookie。
+- `DOUYIN_COOKIE`: 可选，受限抖音单视频解析或外部下载器可尝试带 Cookie。Unraid 模板里建议单独填写，不要和小红书 Cookie 混在一起。
 - `XHS_USER_AGENT`: 可选，覆盖默认浏览器 UA。
 - `REQUEST_TIMEOUT_MS`: 可选，普通请求超时，默认 `15000`。
 - `BATCH_RESOLVE_CONCURRENCY`: 可选，批量解析并发数，默认 `3`。
