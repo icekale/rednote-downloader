@@ -2,17 +2,18 @@
 
 [中文](README.md) | [English](README.en.md)
 
-A Docker-first self-hosted media resolver for RedNote/Xiaohongshu, `x.com` / `twitter.com`, and Douyin single-video links or share text. It provides browser preview, local proxy downloads, optional server-side saving, and Telegram delivery. Agent / OpenClaw / MCP integration has been removed.
+A Docker / Unraid friendly self-hosted media downloader for RedNote/Xiaohongshu, `x.com` / `twitter.com`, and Douyin single-video links or share text. It provides a web UI, browser preview, local proxy downloads, server-side saving, and optional Telegram delivery.
+
+Starting with `v0.2.23`, the Docker image bundles the REST mode of `jiji262/douyin-downloader`. Douyin single-video resolving and server-side downloading work inside one container, without running a separate Python downloader.
 
 ## Highlights
 
-- Resolve Xiaohongshu share text, `xhslink.com`, and RedNote page URLs.
-- Resolve `x.com` / `twitter.com` post media.
-- Resolve Douyin single-video share text, short links, and `douyin.com/video/{aweme_id}` URLs.
-- Preview media in the browser and download through the local `/api/media` proxy.
-- Optionally save media to the server download directory.
-- Optionally configure a Telegram bot for media delivery.
-- Separate Xiaohongshu and Douyin Cookie fields in the web UI; Docker/Unraid deployments can also persist them with `XHS_COOKIE` and `DOUYIN_COOKIE`.
+- RedNote / Xiaohongshu: resolve share text, `xhslink.com` short links, and page URLs.
+- X / Twitter: resolve post images and videos, then download through the local proxy.
+- Douyin: resolve single-video share text, short links, and `douyin.com/video/{aweme_id}` URLs; Docker images include a bundled downloader by default.
+- Web UI: paste a link, preview images/videos, download through the browser proxy, or save server-side.
+- Telegram: optionally deliver resolved media to chats through a bot.
+- Unraid / Docker: persist config and downloads under `/data`; keep `XHS_COOKIE` and `DOUYIN_COOKIE` separate at runtime, never baked into the image.
 
 ## Boundaries
 
@@ -20,7 +21,7 @@ A Docker-first self-hosted media resolver for RedNote/Xiaohongshu, `x.com` / `tw
 - "No watermark" means the service prefers no-watermark or low-watermark sources returned by the platform. If only a suspicious candidate is available, the service returns a warning and still allows download.
 - The service does not transcode, recompress, crop, or remove watermarks with ffmpeg/OpenCV.
 - If a target site returns an anti-bot page, captcha, or no usable media URL, the service fails fast.
-- Docker images bundle the REST mode of `jiji262/douyin-downloader` for server-side Douyin downloads. Cookies are not baked into the image.
+- Docker images bundle the REST mode of `jiji262/douyin-downloader` for server-side Douyin downloads. Cookies are only passed at runtime through the web UI or environment variables, never baked into the image.
 
 ## Quick Start
 
@@ -86,7 +87,7 @@ DOUYIN_DOWNLOADER_OUTPUT_DIR=/path/to/douyin-downloader/Downloaded
 - `REDNOTE_DATA_DIR`: compose-only host path mounted to `/data`.
 - `PUID` / `PGID`: runtime uid/gid used by the container entrypoint.
 - `XHS_COOKIE`: optional manual Cookie header for protected RedNote posts.
-- `DOUYIN_COOKIE`: optional manual Cookie header for protected Douyin single-video resolving or external Douyin downloads.
+- `DOUYIN_COOKIE`: optional manual Cookie header for protected Douyin single-video resolving or bundled/external Douyin downloads.
 - `XHS_USER_AGENT`: optional custom request user agent.
 - `DOUYIN_INTERNAL_DOWNLOADER_ENABLED`: optional; Docker default is `true`. Set to `false` / `0` / `no` / `off` to disable the bundled Douyin downloader.
 - `DOUYIN_INTERNAL_DOWNLOADER_PORT`: optional bundled downloader port inside the container, default `8000`.

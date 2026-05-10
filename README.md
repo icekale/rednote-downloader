@@ -2,17 +2,18 @@
 
 [中文](README.md) | [English](README.en.md)
 
-一个 Docker-first 的自托管媒体解析与下载工具，支持 RedNote / 小红书、`x.com` / `twitter.com`，以及抖音单视频链接或分享文案。它提供网页预览、本地代理下载、可选服务端保存和 Telegram 回传，不再包含 Agent / OpenClaw / MCP 接入功能。
+一个面向 Docker / Unraid 部署的自托管多平台媒体下载器，支持 RedNote / 小红书、`x.com` / `twitter.com`，以及抖音单视频链接或分享文案。它提供 Web UI、浏览器预览、本地代理下载、服务端保存和 Telegram 回传。
+
+从 `v0.2.23` 开始，Docker 镜像内置 `jiji262/douyin-downloader` REST 服务。抖音单视频可以在同一个容器内完成解析与服务端下载，不需要再额外部署 Python 下载器。
 
 ## 主要功能
 
-- 解析小红书分享文案、`xhslink.com`、RedNote 页面链接。
-- 解析 `x.com` / `twitter.com` 帖子媒体。
-- 解析抖音单视频分享文案、短链和 `douyin.com/video/{aweme_id}`。
-- 浏览器内预览图片和视频，并通过本地 `/api/media` 代理下载。
-- 可选保存到服务端下载目录。
-- 可选配置 Telegram bot，把解析到的媒体回传到聊天。
-- Cookie 鉴权分为小红书和抖音两个输入框；Unraid/Docker 也可用 `XHS_COOKIE` 和 `DOUYIN_COOKIE` 分别长期保存。
+- 小红书 / RedNote：支持分享文案、`xhslink.com` 短链和页面链接解析下载。
+- X / Twitter：支持帖子图片、视频媒体解析和代理下载。
+- 抖音：支持单视频分享文案、短链和 `douyin.com/video/{aweme_id}`，Docker 镜像内置下载器，默认单容器可用。
+- Web UI：输入链接即可预览图片/视频，支持浏览器代理下载和服务端保存。
+- Telegram：可选配置 bot，把解析到的媒体回传到指定聊天。
+- Unraid / Docker：使用 `/data` 挂载保存配置和下载结果，`XHS_COOKIE` 与 `DOUYIN_COOKIE` 分平台保存，Cookie 不写入镜像。
 
 ## 能力边界
 
@@ -20,7 +21,7 @@
 - “去水印”定义为优先选择平台返回的无水印或低水印视频源；如果只能拿到疑似带水印候选，会返回 warning 并仍允许下载。
 - 服务不会对媒体做转码、压缩、裁剪或 OpenCV/ffmpeg 水印擦除。
 - 如果目标站点返回验证码、风控页，或者没有暴露可用媒体地址，服务会直接报错。
-- Docker 镜像默认内置 `jiji262/douyin-downloader` REST 服务，用于抖音服务端下载；Cookie 不会写入镜像。
+- Docker 镜像默认内置 `jiji262/douyin-downloader` REST 服务，用于抖音服务端下载；Cookie 只在运行时通过 Web UI 或环境变量传入，不会写入镜像。
 
 ## API
 
@@ -74,7 +75,7 @@
 
 ### `GET /api/diagnostics`
 
-返回服务、Telegram 和外部抖音下载器的诊断信息。
+返回服务、Telegram 和抖音下载器的诊断信息。
 
 ## 本地运行
 
@@ -199,7 +200,7 @@ Telegram 轮询状态路径：
 - `REDNOTE_DATA_DIR`: 仅 compose 示例使用，宿主机映射到容器 `/data` 的根目录。
 - `PUID` / `PGID`: 仅 compose 示例使用，控制容器写入挂载目录的 uid/gid。
 - `XHS_COOKIE`: 可选，受限小红书页面可尝试带 Cookie。
-- `DOUYIN_COOKIE`: 可选，受限抖音单视频解析或外部下载器可尝试带 Cookie。Unraid 模板里建议单独填写，不要和小红书 Cookie 混在一起。
+- `DOUYIN_COOKIE`: 可选，受限抖音单视频解析或内置/外部下载器可尝试带 Cookie。Unraid 模板里建议单独填写，不要和小红书 Cookie 混在一起。
 - `DOUYIN_INTERNAL_DOWNLOADER_ENABLED`: 可选，Docker 默认 `true`，设为 `false` / `0` / `no` / `off` 可关闭镜像内置抖音下载器。
 - `DOUYIN_INTERNAL_DOWNLOADER_PORT`: 可选，内置抖音下载器容器内端口，默认 `8000`。
 - `DOUYIN_DOWNLOADER_BASE_URL`: 可选，外部抖音下载器 REST 地址；留空时内置模式自动使用 `http://127.0.0.1:8000`。

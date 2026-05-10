@@ -1,16 +1,18 @@
 # RedNote Downloader
 
-RedNote Downloader is a self-hosted media resolver for RedNote / Xiaohongshu, X / Twitter, and Douyin single-video links. It provides a browser UI, local proxy downloads, optional server-side saving, and optional Telegram delivery.
+RedNote Downloader is a Docker / Unraid friendly self-hosted media downloader for RedNote / Xiaohongshu, X / Twitter, and Douyin single-video links. It provides a web UI, browser preview, local proxy downloads, server-side saving, and optional Telegram delivery.
+
+Since `v0.2.23`, the image bundles the REST mode of `jiji262/douyin-downloader`. Douyin single-video resolving and server-side downloading work in one container, without deploying a separate Python downloader.
 
 ## Highlights
 
-- Resolve RedNote/Xiaohongshu, X/Twitter, and Douyin single-video links or share text.
-- Preview images and videos directly in the browser.
-- Download through a local proxy to reduce hotlink and CORS issues.
-- Optionally save files into a mounted directory.
-- Optionally configure a Telegram bot for media delivery.
-- Bundles the REST mode of `jiji262/douyin-downloader` for one-container Douyin server-side downloads.
-- Agent / OpenClaw / MCP integration has been removed.
+- RedNote / Xiaohongshu: resolve share text, short links, and page URLs.
+- X / Twitter: resolve post images and videos.
+- Douyin: resolve single-video share text, short links, and `douyin.com/video/{aweme_id}` URLs; Docker images include the downloader by default.
+- Web UI: preview images/videos in the browser and download through the local proxy.
+- Server-side saving: media is written to `/data/downloads`; Douyin defaults to `/data/downloads/douyin`.
+- Telegram: optionally deliver media through a bot.
+- Platform-specific cookies: use `XHS_COOKIE` for Xiaohongshu and `DOUYIN_COOKIE` for Douyin; pass them at runtime, never bake them into the image.
 
 ## Quick Start
 
@@ -37,7 +39,7 @@ http://127.0.0.1:3000/
 - `APP_CONFIG_PATH`: app config path, default `/data/config/.rednote-config.json`
 - `APP_STATE_PATH`: Telegram polling state path, default `/data/config/.rednote-state.json`
 - `XHS_COOKIE`: optional Cookie header for protected RedNote posts
-- `DOUYIN_COOKIE`: optional Cookie header for protected Douyin single-video resolving or external Douyin downloads
+- `DOUYIN_COOKIE`: optional Cookie header for protected Douyin single-video resolving or bundled/external Douyin downloads
 - `DOUYIN_INTERNAL_DOWNLOADER_ENABLED`: optional; defaults to `true` and starts the bundled Douyin downloader
 - `DOUYIN_INTERNAL_DOWNLOADER_PORT`: optional bundled downloader port inside the container, default `8000`
 - `DOUYIN_DOWNLOADER_BASE_URL`: optional external Douyin downloader REST URL; bundled mode defaults to `http://127.0.0.1:8000`
@@ -50,7 +52,7 @@ http://127.0.0.1:3000/
 
 ## Notes
 
-- Douyin support is single-video only in this release.
+- Douyin support is currently single-video only. Gallery posts, profiles, collections, music pages, favorites, live streams, and profile batch downloads are not included.
 - "No watermark" means the service prefers no-watermark or low-watermark sources returned by the platform. It does not perform image-level watermark removal.
 - No transcoding, recompression, or watermarking is applied.
 - Cookies are not baked into the image. Pass them at runtime through the UI or environment. Use `XHS_COOKIE` for Xiaohongshu and `DOUYIN_COOKIE` for Douyin.
