@@ -8,6 +8,9 @@ export const DEFAULT_APP_CONFIG = {
     allowedChatIds: '',
     deliveryMode: 'document',
   },
+  douyin: {
+    cookie: '',
+  },
 };
 
 export const DEFAULT_APP_STATE = {
@@ -92,6 +95,7 @@ export function normalizeServiceBaseUrl(value, fallback = '') {
 
 export function sanitizeAppConfig(input = {}) {
   const telegram = input?.telegram || {};
+  const douyin = input?.douyin || {};
 
   return {
     telegram: {
@@ -99,6 +103,9 @@ export function sanitizeAppConfig(input = {}) {
       botToken: normalizeString(telegram.botToken, DEFAULT_APP_CONFIG.telegram.botToken),
       allowedChatIds: normalizeString(telegram.allowedChatIds, DEFAULT_APP_CONFIG.telegram.allowedChatIds),
       deliveryMode: normalizeDeliveryMode(telegram.deliveryMode || DEFAULT_APP_CONFIG.telegram.deliveryMode),
+    },
+    douyin: {
+      cookie: normalizeString(douyin.cookie, DEFAULT_APP_CONFIG.douyin.cookie),
     },
   };
 }
@@ -109,6 +116,10 @@ export function mergeAppConfig(current, patch = {}) {
     telegram: {
       ...base.telegram,
       ...(patch.telegram || {}),
+    },
+    douyin: {
+      ...base.douyin,
+      ...(patch.douyin || {}),
     },
   };
 
@@ -316,6 +327,10 @@ export function getPublicConfig(config) {
       botTokenSet: Boolean(normalized.telegram.botToken),
       allowedChatIds: normalized.telegram.allowedChatIds,
       deliveryMode: normalized.telegram.deliveryMode,
+    },
+    douyin: {
+      cookieMasked: maskSecret(normalized.douyin.cookie),
+      cookieSet: Boolean(normalized.douyin.cookie),
     },
   };
 }

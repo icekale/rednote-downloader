@@ -24,21 +24,28 @@ test('sanitizeAppConfig applies defaults and trims fields', () => {
       allowedChatIds: ' 1, 2 ',
       deliveryMode: 'preview',
     },
+    douyin: {
+      cookie: '  ttwid=1; odin_tt=2  ',
+    },
   });
 
   assert.equal(result.telegram.botToken, 'abc123');
   assert.equal(result.telegram.deliveryMode, 'preview');
+  assert.equal(result.douyin.cookie, 'ttwid=1; odin_tt=2');
   assert.equal(result.openclaw, undefined);
   assert.equal(result.hermes, undefined);
 });
 
-test('mergeAppConfig preserves unspecified existing secrets', () => {
+test('mergeAppConfig preserves the saved douyin cookie when patching telegram', () => {
   const result = mergeAppConfig({
     telegram: {
       enabled: true,
       botToken: 'secret-token',
       allowedChatIds: '1',
       deliveryMode: 'document',
+    },
+    douyin: {
+      cookie: 'ttwid=abc',
     },
   }, {
     telegram: {
@@ -48,6 +55,21 @@ test('mergeAppConfig preserves unspecified existing secrets', () => {
 
   assert.equal(result.telegram.botToken, 'secret-token');
   assert.equal(result.telegram.allowedChatIds, '1,2');
+  assert.equal(result.douyin.cookie, 'ttwid=abc');
+});
+
+test('mergeAppConfig clears the douyin cookie when an empty cookie is patched', () => {
+  const result = mergeAppConfig({
+    douyin: {
+      cookie: 'ttwid=abc',
+    },
+  }, {
+    douyin: {
+      cookie: '',
+    },
+  });
+
+  assert.equal(result.douyin.cookie, '');
 });
 
 test('getPublicConfig masks stored telegram token', () => {
@@ -64,6 +86,18 @@ test('getPublicConfig masks stored telegram token', () => {
   assert.match(result.telegram.botTokenMasked, /^1234\*\*\*cdef$/);
   assert.equal(result.openclaw, undefined);
   assert.equal(result.hermes, undefined);
+});
+
+test('getPublicConfig masks the saved douyin cookie without echoing it', () => {
+  const result = getPublicConfig({
+    douyin: {
+      cookie: 'ttwid=abcdef123456',
+    },
+  });
+
+  assert.equal(result.douyin.cookieSet, true);
+  assert.match(result.douyin.cookieMasked, /^ttwi\*\*\*3456$/);
+  assert.equal(result.douyin.cookie, undefined);
 });
 
 test('sanitizeAppState keeps a non-negative telegram offset', () => {

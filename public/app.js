@@ -35,6 +35,9 @@ const telegramTokenHint = document.querySelector('#telegram-token-hint');
 const telegramConfigStatus = document.querySelector('#telegram-config-status');
 const saveTelegramConfigButton = document.querySelector('#save-telegram-config-button');
 const refreshRuntimeButton = document.querySelector('#refresh-runtime-button');
+const serviceDouyinCookie = document.querySelector('#service-douyin-cookie');
+const serviceClearDouyinCookie = document.querySelector('#service-clear-douyin-cookie');
+const serviceDouyinCookieHint = document.querySelector('#service-douyin-cookie-hint');
 
 const refreshDiagnosticsButton = document.querySelector('#refresh-diagnostics-button');
 const diagnosticsCardsEl = document.querySelector('#diagnostics-cards');
@@ -60,6 +63,7 @@ const TRANSLATIONS = {
     'meta.title': 'RedNote Downloader',
     'tabs.aria': '主功能标签',
     'tabs.resolve': '解析下载',
+    'tabs.telegram': '设置',
     'tabs.diagnostics': '诊断',
     'resolve.title': '帖子解析与下载',
     'resolve.input.label': '分享链接或文案',
@@ -177,9 +181,11 @@ const TRANSLATIONS = {
     'note.noDescription': '这条帖子没有公开描述文本。',
     'telegram.tokenHint.saved': '已保存 Token：{token}',
     'telegram.tokenHint.none': '当前没有保存 Telegram Token。',
-    'telegram.status.saving': '正在保存 Telegram 配置...',
-    'telegram.status.saved': 'Telegram 配置已保存并热更新。',
-    'telegram.status.saveFailed': '保存 Telegram 配置失败',
+    'douyinCookie.hint.saved': '已保存 Cookie：{cookie}',
+    'douyinCookie.hint.none': '当前没有保存抖音 Cookie。',
+    'telegram.status.saving': '正在保存设置...',
+    'telegram.status.saved': '设置已保存并热更新。',
+    'telegram.status.saveFailed': '保存设置失败',
     'telegram.status.refreshed': '运行状态已刷新。',
     'telegram.status.refreshFailed': '刷新失败',
     'copy.diagnostics': '已复制诊断 JSON。',
@@ -188,6 +194,7 @@ const TRANSLATIONS = {
     'meta.title': 'RedNote Downloader',
     'tabs.aria': 'Primary tabs',
     'tabs.resolve': 'Resolve',
+    'tabs.telegram': 'Settings',
     'tabs.diagnostics': 'Diagnostics',
     'resolve.title': 'Resolve And Download',
     'resolve.input.label': 'Share URL or text',
@@ -305,9 +312,11 @@ const TRANSLATIONS = {
     'note.noDescription': 'This post does not expose a public description.',
     'telegram.tokenHint.saved': 'Saved token: {token}',
     'telegram.tokenHint.none': 'No Telegram token is currently saved.',
-    'telegram.status.saving': 'Saving Telegram config...',
-    'telegram.status.saved': 'Telegram config saved and hot-reloaded.',
-    'telegram.status.saveFailed': 'Failed to save Telegram config',
+    'douyinCookie.hint.saved': 'Saved cookie: {cookie}',
+    'douyinCookie.hint.none': 'No Douyin cookie is currently saved.',
+    'telegram.status.saving': 'Saving settings...',
+    'telegram.status.saved': 'Settings saved and hot-reloaded.',
+    'telegram.status.saveFailed': 'Failed to save settings',
     'telegram.status.refreshed': 'Runtime status refreshed.',
     'telegram.status.refreshFailed': 'Failed to refresh status',
     'copy.diagnostics': 'Copied the diagnostics JSON.',
@@ -1163,6 +1172,11 @@ function applyConfigToForm(config, telegram) {
     : t('telegram.tokenHint.none');
   telegramBotToken.value = '';
   telegramClearToken.checked = false;
+  serviceDouyinCookieHint.textContent = config.douyin?.cookieSet
+    ? t('douyinCookie.hint.saved', { cookie: config.douyin.cookieMasked })
+    : t('douyinCookie.hint.none');
+  serviceDouyinCookie.value = '';
+  serviceClearDouyinCookie.checked = false;
 }
 
 async function loadDiagnostics() {
@@ -1216,6 +1230,12 @@ async function saveTelegramConfig() {
       patch.telegram.botToken = '';
     } else if (telegramBotToken.value.trim()) {
       patch.telegram.botToken = telegramBotToken.value.trim();
+    }
+
+    if (serviceClearDouyinCookie.checked) {
+      patch.douyin = { cookie: '' };
+    } else if (serviceDouyinCookie.value.trim()) {
+      patch.douyin = { cookie: serviceDouyinCookie.value.trim() };
     }
 
     await fetchJson('/api/config', {

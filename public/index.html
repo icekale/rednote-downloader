@@ -24,7 +24,7 @@
         </div>
         <nav class="tabs topbar-tabs" aria-label="主功能标签" data-i18n-aria-label="tabs.aria">
           <button class="tab-button active" type="button" data-tab="resolve" data-i18n="tabs.resolve">解析下载</button>
-          <button class="tab-button" type="button" data-tab="telegram">Telegram</button>
+          <button class="tab-button" type="button" data-tab="telegram" data-i18n="tabs.telegram">设置</button>
           <button class="tab-button" type="button" data-tab="diagnostics" data-i18n="tabs.diagnostics">诊断</button>
         </nav>
       </div>
@@ -160,8 +160,8 @@
         <section class="card section-card">
             <div class="section-head">
               <div>
-                <p class="section-kicker">Telegram</p>
-                <h2 data-i18n="telegram.title">图形化 Bot 配置</h2>
+                <p class="section-kicker">Settings</p>
+                <h2 data-i18n="telegram.title">服务设置</h2>
               </div>
             <p class="section-note" data-i18n="telegram.note">保存后立即热更新。适合本地自己调，不用再回容器里改环境变量。</p>
           </div>
@@ -197,6 +197,28 @@
               <section class="subcard form-panel telegram-panel">
                 <div class="section-head compact">
                   <div>
+                    <p class="section-kicker">Douyin</p>
+                    <h3 data-i18n="douyinCookie.title">抖音下载 Cookie</h3>
+                  </div>
+                </div>
+
+                <label class="field">
+                  <span data-i18n="douyinCookie.field">抖音 Cookie Header</span>
+                  <input id="service-douyin-cookie" type="password" placeholder="留空表示保持当前已保存 Cookie" data-i18n-placeholder="douyinCookie.placeholder">
+                </label>
+
+                <label class="checkbox-row checkbox-block">
+                  <input id="service-clear-douyin-cookie" type="checkbox">
+                  <span data-i18n="douyinCookie.clear">保存时清空已保存 Cookie</span>
+                </label>
+
+                <p id="service-douyin-cookie-hint" class="status telegram-status"></p>
+                <p class="section-note" data-i18n="douyinCookie.note">保存在服务端配置文件里，抖音下载请求会自动带上。请从已登录抖音的浏览器复制完整 Cookie。</p>
+              </section>
+
+              <section class="subcard form-panel telegram-panel">
+                <div class="section-head compact">
+                  <div>
                     <p class="section-kicker">Delivery</p>
                     <h3 data-i18n="telegram.delivery.title">发送策略</h3>
                   </div>
@@ -217,7 +239,7 @@
 
                 <div class="telegram-panel-footer">
                   <div class="button-row telegram-actions">
-                    <button id="save-telegram-config-button" type="button" class="button button-primary" data-i18n="telegram.save">保存 Telegram 配置</button>
+                    <button id="save-telegram-config-button" type="button" class="button button-primary" data-i18n="telegram.save">保存设置</button>
                     <button id="refresh-runtime-button" type="button" class="button" data-i18n="telegram.refresh">刷新状态</button>
                   </div>
 

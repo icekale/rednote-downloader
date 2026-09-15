@@ -182,6 +182,49 @@ test('POST /api/resolve uses the Douyin-specific cookie field for Douyin inputs'
   assert.equal(data.ok, true);
 });
 
+test('POST /api/resolve falls back to the douyin cookie saved via /api/config', async (t) => {
+  const { origin } = await startTestApp(t, {
+    dependencies: {
+      resolveNote: async (input, options) => {
+        assert.equal(input, 'https://www.douyin.com/video/7321234567890123456');
+        assert.equal(options.cookie, 'saved-cookie=1');
+        return {
+          resolvedUrl: input,
+          noteId: '7321234567890123456',
+          title: 'Douyin Video',
+          description: '',
+          type: 'video',
+          author: null,
+          media: [{ index: 1, type: 'video', url: 'https://v3.douyinvod.com/video.mp4' }],
+          warnings: [],
+        };
+      },
+    },
+  });
+
+  const saveResponse = await fetch(`${origin}/api/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ douyin: { cookie: 'saved-cookie=1' } }),
+  });
+  assert.equal(saveResponse.status, 200);
+  const saved = await saveResponse.json();
+  assert.equal(saved.config.douyin.cookieSet, true);
+  assert.equal(saved.config.douyin.cookie, undefined);
+
+  const response = await fetch(`${origin}/api/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      input: 'https://www.douyin.com/video/7321234567890123456',
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.ok, true);
+});
+
 test('POST /api/resolve falls back to DOUYIN_COOKIE for Douyin inputs', async (t) => {
   const { origin } = await startTestApp(t, {
     env: {

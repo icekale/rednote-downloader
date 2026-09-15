@@ -447,6 +447,7 @@ export async function createRednoteApp(options = {}) {
     if (isDouyinInput(input)) {
       return normalizeCookieValue(body.douyinCookie)
         || legacyCookie
+        || normalizeCookieValue(appConfig.douyin?.cookie)
         || normalizeCookieValue(settings.env.DOUYIN_COOKIE);
     }
 
@@ -778,7 +779,10 @@ export async function createRednoteApp(options = {}) {
       },
       douyin: {
         externalConfigured: douyinDownloaderConfigured,
-        cookieConfigured: Boolean(normalizeCookieValue(settings.env.DOUYIN_COOKIE)),
+        cookieConfigured: Boolean(
+          normalizeCookieValue(appConfig.douyin?.cookie)
+            || normalizeCookieValue(settings.env.DOUYIN_COOKIE),
+        ),
         baseUrl: douyinDownloader.baseUrl,
         provider: 'jiji262/douyin-downloader',
       },
