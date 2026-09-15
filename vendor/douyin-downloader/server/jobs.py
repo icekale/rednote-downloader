@@ -27,10 +27,9 @@ class JobStatus:
 
 
 class DownloadJob:
-    def __init__(self, job_id: str, url: str, payload: Any = None):
+    def __init__(self, job_id: str, url: str):
         self.job_id = job_id
         self.url = url
-        self.payload = payload if payload is not None else url
         self.status = JobStatus.PENDING
         self.created_at = _now_iso()
         self.started_at: Optional[str] = None
@@ -91,9 +90,9 @@ class JobManager:
         self.max_jobs = max(1, int(max_jobs))
         self.job_ttl_seconds = max(0.0, float(job_ttl_seconds))
 
-    async def submit(self, url: str, payload: Any = None) -> DownloadJob:
+    async def submit(self, url: str) -> DownloadJob:
         job_id = uuid.uuid4().hex[:12]
-        job = DownloadJob(job_id=job_id, url=url, payload=payload)
+        job = DownloadJob(job_id=job_id, url=url)
         async with self._lock:
             self._prune_locked()
             self._jobs[job_id] = job
@@ -135,15 +134,13 @@ class JobManager:
             job.status = JobStatus.RUNNING
             job.started_at = _now_iso()
             try:
-                counts = await self.executor(job.payload)
+                counts = await self.executor(job.url)
                 job.total = int(counts.get("total", 0))
                 job.success = int(counts.get("success", 0))
                 job.failed = int(counts.get("failed", 0))
                 job.skipped = int(counts.get("skipped", 0))
                 # 只要跑完就是 success；具体成功/失败个数通过字段区分
-                job.status = (
-                    JobStatus.SUCCESS if job.failed == 0 else JobStatus.FAILED
-                )
+                job.status = JobStatus.SUCCESS if job.failed == 0 else JobStatus.FAILED
             except Exception as exc:
                 job.status = JobStatus.FAILED
                 job.error = f"{type(exc).__name__}: {exc}"

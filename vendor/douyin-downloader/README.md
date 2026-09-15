@@ -14,10 +14,29 @@
 
 A practical Douyin downloader supporting videos, image-notes, collections, music, favorites collections, and profile batch downloads, with progress display, retries, SQLite deduplication, download integrity checks, and browser fallback support.
 
-> This document targets **V2.0 (`main` branch)**.
-> For the legacy version, switch to **V1.0**: `git fetch --all && git switch V1.0`
+## Desktop App (Douzy)
+
+A desktop GUI built on the same backend, with dedicated workspaces for Douyin, TikTok, and YouTube. Paste a link to start, sync account content, follow every task, and manage downloaded works in a local archive.
+
+- **Three platforms:** Douyin videos, galleries, profiles, and collections; TikTok videos, photos, and profiles; YouTube videos, Shorts, channels, and playlists
+- **Account content:** sync Douyin following, favorites collections, collected series, and likes
+- **Visual workflow:** multi-link queue, task status and retry controls, local download archive, filters, and quick re-download
+
+> **Beta:** The desktop app is currently in closed beta. To try it, download the build from the [Releases](https://github.com/jiji262/douyin-downloader/releases) page.
+
+| **Douyin link download** | **TikTok download workspace** | **YouTube workbench** |
+|:---:|:---:|:---:|
+| ![Douzy Douyin link download workspace](img/desktop/001.png) | ![Douzy TikTok download workspace](img/desktop/002.png) | ![Douzy YouTube workbench](img/desktop/003.png) |
+| Paste a video, gallery, profile, or collection link and start in one click. | Download public videos, photo posts, and profiles without signing in. | Scan videos, Shorts, channels, and playlists, then configure video, MP3, or subtitle downloads. |
+| **Following management** | **Favorites and likes** | **Task Center** |
+| ![Douzy following management](img/desktop/004.png) | ![Douzy favorites and likes](img/desktop/005.png) | ![Douzy Task Center](img/desktop/006.png) |
+| Sync creators, filter new works, add notes, and download directly from the list. | Browse collected videos, series, and liked works from the current Douyin account. | Track job results, retry failures, and open output folders. |
+
+_Screenshots were captured from the current desktop `main` build. Demonstration data is used for privacy._
 
 ## Feature Overview
+
+> **⚠️ Douyin's anti-bot gate blocks the CLI from downloading likes / favorites / favorite collections (since 2026-08) and single videos / notes, collections and music (since 2026-09); profile posts can only rely on the browser fallback.** See [Current Limitations](#current-limitations) for the cause and what still works; use the Douzy desktop app for these downloads.
 
 ### Supported
 
@@ -42,8 +61,8 @@ A practical Douyin downloader supporting videos, image-notes, collections, music
 | Concurrent downloads | Configurable concurrency, default 5 |
 | Retry with backoff | Exponential backoff (1s, 2s, 5s) |
 | Rate limiting | Default 2 req/s |
-| SQLite deduplication | Database + local file dual dedup |
-| Incremental downloads | `increase.post/like/mix/music` |
+| SQLite history | Records download metadata; does not decide incremental skips |
+| Incremental downloads | Disk-based skip/redownload via `increase.post/like/mix/music` |
 | Time filters | `start_time` / `end_time` |
 | Browser fallback | Launches browser when pagination is blocked, manual CAPTCHA supported |
 | Download integrity check | Content-Length validation, auto-cleanup of incomplete files |
@@ -53,6 +72,21 @@ A practical Douyin downloader supporting videos, image-notes, collections, music
 
 ### Current Limitations
 
+- **Douyin Argus gate:** Douyin's edge `ArgusSecurityPlugin` answers every non-browser request to these endpoints with
+  HTTP 403 `Blocked by ArgusSecurityPlugin Uifid Not Found`, with or without cookies and no matter how often you retry:
+  - since 2026-08: `aweme/favorite`, `collects/*`, `aweme/listcollection`, `mix/listcollection` (likes / favorites / favorite collections)
+  - since 2026-09-10: `mix/aweme` (collection items)
+  - since 2026-09-14: `aweme/detail` (single video / note), `aweme/post` (profile posts), `mix/detail`, `mix/list`,
+    `music/detail`, `music/aweme`, `music/list`
+
+  The required `x-secsdk-web-signature` can only be produced by the SDK inside a real Douyin web page, which the CLI's
+  direct API requests cannot carry, so single videos / notes, collections, music and likes / favorites **cannot be
+  downloaded** in the CLI. Profile-post (`post`) API paging is rejected as well; with `playwright` installed and
+  `browser_fallback` left on (headed by default), the browser fallback reads the page's own post-list requests and may
+  still work, but it has not been tested against this gate. The Douzy desktop app sends these requests through its
+  built-in login window and is not affected.
+  Endpoints still reachable directly as of 2026-09-14: user profile, following list, comments, live rooms (webcast),
+  hot board and search.
 - Browser fallback is fully validated for `post`; `like/mix/music` currently relies on API pagination
 - `number.allmix` / `increase.allmix` are retained as compatibility aliases and normalized to `mix`
 - `collect` / `collectmix` currently work for the account represented by the logged-in cookies only
@@ -356,13 +390,19 @@ notifications:
 All enabled providers are notified in parallel; a failing provider never blocks the download flow.
 
 
-### Incremental download (only new items)
+### Incremental download (disk-based)
 
 ```yaml
 increase:
   post: true
-database: true    # incremental mode requires database
 ```
+
+With `true`, the downloader skips an item only when its non-empty primary media
+already exists under the current download directory. Deleting the media file makes
+the next run download it again; SQLite history does not affect this decision.
+
+Set a mode to `false` to redownload and atomically replace existing files within the
+current number/date/media filters.
 
 ### Full crawl (no item limit)
 
@@ -424,7 +464,7 @@ pytest -q
 |-------|-------------|
 | `mode` | Supports `post`/`like`/`mix`/`music`; logged-in favorites mode additionally supports standalone `collect`/`collectmix` |
 | `number.post/like/mix/music/collect/collectmix` | Per-mode download limit, 0 = unlimited |
-| `increase.post/like/mix/music` | Per-mode incremental toggle |
+| `increase.post/like/mix/music` | `true`: skip existing primary media on disk; `false`: redownload and overwrite current scope |
 | `start_time` / `end_time` | Time filter (format: `YYYY-MM-DD`) |
 | `folderstyle` | Create per-item subdirectories |
 | `browser_fallback.*` | Browser fallback for `post` when pagination is restricted |
@@ -434,7 +474,7 @@ pytest -q
 | `live.*` | Live stream recording options (max_duration_seconds / chunk_size / idle_timeout_seconds) |
 | `notifications.*` | Bark/Telegram/Webhook push on completion |
 | `server.*` | REST API server tuning (max_jobs, job_ttl_seconds) |
-| `proxy` | HTTP/HTTPS proxy for API requests and media downloads, e.g. `http://127.0.0.1:7890` |
+| `proxy` | Optional HTTP/HTTPS proxy setting |
 | `database` | Enable SQLite deduplication and history |
 | `database_path` | SQLite path, default is `dy_downloader.db` in the current working directory |
 | `thread` | Concurrent download count |
@@ -523,7 +563,7 @@ This is a common pagination risk-control behavior. Make sure:
 
 ### 2) Why is the progress output noisy/repeated?
 
-By default, `progress.quiet_logs: true` suppresses logs during progress stage.
+By default, `progress.quiet_logs: true` suppresses logs during progress stage.  
 Use `--show-warnings` or `-v` temporarily when debugging.
 
 ### 3) What if cookies are expired?
@@ -549,20 +589,11 @@ Check in order:
 sqlite3 dy_downloader.db "SELECT aweme_id, title, author_name, datetime(download_time, 'unixepoch', 'localtime') FROM aweme ORDER BY download_time DESC LIMIT 20;"
 ```
 
-## Legacy Version (V1.0)
-
-If you prefer the legacy script style (V1.0):
-
-```bash
-git fetch --all
-git switch V1.0
-```
-
 ## Community Group
 
-<img src="./img/fuye.jpg" alt="qun" width="360" />
+<img src="./img/fuye.jpg" alt="qun" width="240" />
 
-点击链接加入群聊【QQ群】：[https://qm.qq.com/q/GDCzZCO3mM](https://qm.qq.com/q/GDCzZCO3mM)
+点击链接加入群聊【QQ群】：[https://qm.qq.com/q/9xoNt8Wzv4](https://qm.qq.com/q/9xoNt8Wzv4)
 
 ## Disclaimer
 
@@ -578,3 +609,7 @@ By continuing to use this project, you acknowledge and accept the statements abo
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](./LICENSE) for details.
+
+## Friendly Links
+
+- [LINUX DO](https://linux.do/)

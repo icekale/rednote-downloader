@@ -1,6 +1,35 @@
 import re
-from urllib.parse import urlparse
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
+
+_WINDOWS_RESERVED_STEMS = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def _host_matches(host: str, base: str) -> bool:
+    return host == base or host.endswith("." + base)
+
+
+def _is_douyin_web_host(host: str) -> bool:
+    return _host_matches(host, "douyin.com") or _host_matches(host, "iesdouyin.com")
+
+
+def _is_live_replay_path(host: str, path: str) -> bool:
+    if _is_douyin_web_host(host):
+        return bool(re.fullmatch(r"/vsdetail/\d+/?", path))
+    return host == "webcast.amemv.com" and bool(
+        re.fullmatch(r"/douyin/webcast/reflow/episode/\d+/?", path)
+    )
+
+
+def _is_live_reflow_path(host: str, path: str) -> bool:
+    return host == "webcast.amemv.com" and bool(re.fullmatch(r"/douyin/webcast/reflow/\d+/?", path))
 
 
 def validate_url(url: str) -> bool:
@@ -13,24 +42,29 @@ def validate_url(url: str) -> bool:
 
 def sanitize_filename(filename: str, max_length: int = 80) -> str:
     # 换行符 → 空格
-    filename = filename.replace('\n', ' ').replace('\r', ' ')
+    filename = filename.replace("\n", " ").replace("\r", " ")
     # Windows 非法字符 + #，逗号 → 下划线
-    filename = re.sub(r'[<>:"/\\|?*#\x00-\x1f]', '_', filename)
-    # 连续空格/下划线 → 单个下划线
-    filename = re.sub(r'[\s_]+', '_', filename)
+    filename = re.sub(r'[<>:"/\\|?*#\x00-\x1f]', "_", filename)
+    # 连续下划线 → 单个下划线（保留空格，不再把空格折叠成下划线）
+    filename = re.sub(r"_+", "_", filename)
+    # 连续空格 → 单个空格
+    filename = re.sub(r" +", " ", filename)
     # 去首尾
-    filename = filename.strip('._- ')
+    filename = filename.strip("._- ")
 
     if len(filename) > max_length:
-        filename = filename[:max_length].rstrip('._- ')
+        filename = filename[:max_length].rstrip("._- ")
 
-    return filename or 'untitled'
+    if filename.split(".", 1)[0].upper() in _WINDOWS_RESERVED_STEMS:
+        filename = f"_{filename}"[:max_length]
+
+    return filename or "untitled"
 
 
 SHORT_URL_HOSTS = (
-    'v.douyin.com',
-    'v.iesdouyin.com',
-    'iesdouyin.com',
+    "v.douyin.com",
+    "v.iesdouyin.com",
+    "iesdouyin.com",
 )
 
 
@@ -41,48 +75,69 @@ def is_short_url(url: str) -> bool:
     # 允许用户粘贴不带 scheme 的短链（例如直接从 App 复制）
     candidate = url.strip()
     lowered = candidate.lower()
-    for scheme in ('https://', 'http://'):
+    for scheme in ("https://", "http://"):
         if lowered.startswith(scheme):
-            lowered = lowered[len(scheme):]
+            lowered = lowered[len(scheme) :]
             break
     for host in SHORT_URL_HOSTS:
-        if lowered.startswith(f'{host}/') or lowered == host:
+        if lowered.startswith(f"{host}/") or lowered == host:
             return True
     return False
 
 
 def normalize_short_url(url: str) -> str:
     """确保短链带 https:// 前缀，便于传给 aiohttp。"""
-    stripped = (url or '').strip()
-    if stripped.lower().startswith(('http://', 'https://')):
+    stripped = (url or "").strip()
+    if stripped.lower().startswith(("http://", "https://")):
         return stripped
-    return f'https://{stripped}'
+    return f"https://{stripped}"
 
 
 def parse_url_type(url: str) -> Optional[str]:
     # 短链在调用方（CLI/调度层）统一先解析为真实 URL 后再判断类型；
     # 若仍是短链，返回 'short' 明确提示需要解析，而不是错误地全部落到 'video'。
     if is_short_url(url):
-        return 'short'
+        return "short"
 
     parsed = urlparse(url)
-    host = (parsed.netloc or '').lower()
+    host = (parsed.hostname or "").lower()
     path = parsed.path
 
-    # live.douyin.com/{room_id} — 直播间专用子域，path 仅有一段数字。
-    if host.startswith('live.douyin.com'):
-        return 'live'
+    if _is_live_replay_path(host, path):
+        return "live_replay"
+    if _is_live_reflow_path(host, path):
+        return "live"
 
-    if '/video/' in path:
-        return 'video'
-    if '/user/' in path:
-        return 'user'
-    if '/note/' in path or '/gallery/' in path or '/slides/' in path:
-        return 'gallery'
-    if '/collection/' in path or '/mix/' in path:
-        return 'collection'
-    if '/music/' in path:
-        return 'music'
-    if '/live/' in path or '/follow/live/' in path:
-        return 'live'
+    if not _is_douyin_web_host(host):
+        return None
+
+    # modal_id 参数表示在任意页面（用户主页、发现页、搜索页等）弹窗查看单个作品，
+    # 应优先识别为单作品下载，而非该页面本身的类型。
+    qs = parse_qs(parsed.query)
+    modal_ids = qs.get("modal_id", [])
+    if modal_ids and modal_ids[0].strip():
+        return "video"
+
+    if host == "live.douyin.com":
+        return "live" if re.fullmatch(r"/\d+/?", path) else None
+
+    # 放映厅长视频（版权影视）。识别出来只为给用户一条明确的拒绝理由——
+    # 内容整轨 MPEG-CENC(AES-CTR) 加密，且抖音作品详情接口对这类 id 直接回
+    # filter_reason=lvideo_not_support，任何解析路径都拿不到可播放的成片。
+    # 必须放在 /video/ 之前：以后若有人给这里加宽松正则，先撞上这条拒绝。
+    # 详见 docs/research/douyin-lvdetail-long-video.md。
+    if "/lvdetail/" in path:
+        return "lvdetail"
+    if "/video/" in path:
+        return "video"
+    if "/user/" in path:
+        return "user"
+    if "/note/" in path or "/gallery/" in path or "/slides/" in path:
+        return "gallery"
+    if "/collection/" in path or "/mix/" in path:
+        return "collection"
+    if "/music/" in path:
+        return "music"
+    if re.fullmatch(r"/(?:follow/|share/)?live/\d+/?", path):
+        return "live"
     return None

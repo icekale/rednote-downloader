@@ -1,12 +1,34 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.downloader_base import BaseDownloader, DownloadResult
-from core.user_modes.base_strategy import BaseUserModeStrategy
+from core.user_modes.base_strategy import (
+    _HARD_PAGE_FAILURE_CAUSES,
+    BaseUserModeStrategy,
+    PageRequestFailedError,
+    fetch_page_folding_bridge_failure,
+)
 from utils.logger import setup_logger
 
 logger = setup_logger("MixDownloader")
+
+_SCOPE_LABEL = "合集"
+
+
+def derive_mix_collection_dir(mix_detail: Optional[Dict[str, Any]], mix_id: Any) -> str:
+    """Folder name for a 合集's own directory.
+
+    Prefer the mix's display name (``mix_name`` → ``title``); fall back to the
+    ``mix_id`` so downloads never collapse into a bare shared ``mix`` dir.
+    Shared by the fresh-download (:class:`MixDownloader`) and retry
+    (:mod:`core.retry_executor`) paths so a retried item lands in the SAME
+    ``<author>/mix/<collection>/`` folder as its originally-downloaded peers.
+    """
+    name = ""
+    if isinstance(mix_detail, dict):
+        name = (mix_detail.get("mix_name") or mix_detail.get("title") or "").strip()
+    return name or str(mix_id)
 
 
 class MixDownloader(BaseDownloader):
@@ -18,7 +40,7 @@ class MixDownloader(BaseDownloader):
             logger.error("No mix_id found in parsed URL")
             return result
 
-        aweme_list = await self._collect_mix_aweme_list(str(mix_id))
+        aweme_list, result.incomplete_reason = await self._collect_mix_aweme_list(str(mix_id))
 
         result.total = len(aweme_list)
         self._progress_set_item_total(result.total, "合集作品待下载")
@@ -31,6 +53,9 @@ class MixDownloader(BaseDownloader):
             else None
         ) or "mix"
 
+        # Give each 合集 its own folder: <author>/mix/<合集名>/... .
+        collection_dir = derive_mix_collection_dir(mix_detail, mix_id)
+
         async def _process_aweme(item: Dict[str, Any]):
             aweme_id = item.get("aweme_id")
             if not aweme_id:
@@ -38,17 +63,24 @@ class MixDownloader(BaseDownloader):
                 return {"status": "failed", "aweme_id": None}
 
             if not await self._should_download(str(aweme_id)):
-                self._progress_advance_item("skipped", str(aweme_id))
-                return {"status": "skipped", "aweme_id": aweme_id}
+                saved = await self._collect_comments_for_existing_aweme(
+                    item,
+                    author_name,
+                    mode="mix",
+                    collection_dir=collection_dir,
+                )
+                status = "success" if saved else "skipped"
+                self._progress_advance_item(status, str(aweme_id))
+                return {"status": status, "aweme_id": aweme_id}
 
-            success = await self._download_aweme_assets(item, author_name, mode="mix")
+            success = await self._download_aweme_assets(
+                item, author_name, mode="mix", collection_dir=collection_dir
+            )
             status = "success" if success else "failed"
             self._progress_advance_item(status, str(aweme_id))
             return {"status": status, "aweme_id": aweme_id}
 
-        download_results = await self.queue_manager.download_batch(
-            _process_aweme, aweme_list
-        )
+        download_results = await self.queue_manager.download_batch(_process_aweme, aweme_list)
         for entry in download_results:
             status = entry.get("status") if isinstance(entry, dict) else None
             if status == "success":
@@ -59,24 +91,42 @@ class MixDownloader(BaseDownloader):
                 result.failed += 1
         return result
 
-    async def _collect_mix_aweme_list(self, mix_id: str) -> List[Dict[str, Any]]:
+    async def _collect_mix_aweme_list(
+        self, mix_id: str
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """返回 ``(作品列表, 没取全的原因)``。
+
+        空页分三档,与 ``BaseUserModeStrategy._raise_if_page_request_failed``
+        同一套判据:请求失败 / 接口报错是硬失败——第一页就失败没有成果可保,
+        抛 ``PageRequestFailedError`` 按失败结案;后面的页失败则保住已拿到的
+        条目并记原因。``"aweme_list": null`` 只软停(见 docs/spec/gotchas.md)。
+        以前一律 ``break``,``mix/aweme/`` 被 Argus 403 时任务就成了
+        「全部成功 · 0 项」,用户看不到任何原因。
+        """
         fetch_mix_aweme = getattr(self.api_client, "get_mix_aweme", None)
         if not callable(fetch_mix_aweme):
             logger.error("API client has no get_mix_aweme implementation")
-            return []
+            return [], None
 
         aweme_list: List[Dict[str, Any]] = []
         has_more = True
         cursor = 0
+        page_index = 0
         number_limit = int(self.config.get("number", {}).get("mix", 0) or 0)
 
         while has_more:
             await self.rate_limiter.acquire()
-            raw_page = await fetch_mix_aweme(mix_id, cursor=cursor, count=20)
+            page_index += 1
+            raw_page = await fetch_page_folding_bridge_failure(
+                fetch_mix_aweme, mix_id, cursor=cursor, count=20
+            )
             page = BaseUserModeStrategy._normalize_page_data(raw_page)
             items = page.get("items", [])
             if not items:
-                break
+                incomplete_reason = self._stop_reason_for_empty_page(
+                    page, page_index=page_index, collected=len(aweme_list)
+                )
+                return aweme_list, incomplete_reason
 
             for item in items:
                 aweme = self._extract_aweme_from_item(item)
@@ -97,7 +147,21 @@ class MixDownloader(BaseDownloader):
                 break
             cursor = next_cursor
 
-        return aweme_list
+        return aweme_list, None
+
+    @staticmethod
+    def _stop_reason_for_empty_page(
+        page: Dict[str, Any], *, page_index: int, collected: int
+    ) -> Optional[str]:
+        cause = BaseUserModeStrategy._empty_page_failure_cause(page)
+        if cause is None:
+            return None
+        detail = f"{_SCOPE_LABEL} 第 {page_index} 页{cause}"
+        if cause in _HARD_PAGE_FAILURE_CAUSES and collected <= 0:
+            logger.warning("%s page %d %s, aborting", _SCOPE_LABEL, page_index, cause)
+            raise PageRequestFailedError(f"{detail}（可能被限流或需要重新登录），请稍后重试")
+        logger.warning("%s page %d %s, stopping walk", _SCOPE_LABEL, page_index, cause)
+        return f"{detail}，内容可能不完整，请稍后重试"
 
     async def _get_mix_detail(self, mix_id: str) -> Optional[Dict[str, Any]]:
         getter = getattr(self.api_client, "get_mix_detail", None)

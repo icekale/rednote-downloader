@@ -1,11 +1,13 @@
 import json
-import os
 import logging
+import os
+import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+
 from utils.cookie_utils import parse_cookie_header, sanitize_cookies
 
 from .default_config import DEFAULT_CONFIG
@@ -35,16 +37,10 @@ class ConfigLoader:
 
         return self._normalize_mix_aliases(config, override_sources)
 
-    def _merge_config(
-        self, base: Dict[str, Any], override: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _merge_config(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
         result = base.copy()
         for key, value in override.items():
-            if (
-                key in result
-                and isinstance(result[key], dict)
-                and isinstance(value, dict)
-            ):
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
                 result[key] = self._merge_config(result[key], value)
             else:
                 result[key] = value
@@ -74,7 +70,7 @@ class ConfigLoader:
         # canonical key 为 mix，allmix 作为兼容别名保留并同步
         normalization_rules = (
             ("number", 0),
-            ("increase", False),
+            ("increase", True),
         )
         for section, default_value in normalization_rules:
             section_config = config.get(section)
@@ -99,12 +95,8 @@ class ConfigLoader:
             mix_is_default = mix_value == default_mix_value
             allmix_is_default = allmix_value == default_allmix_value
 
-            mix_explicit = self._is_key_explicit_in_sources(
-                override_sources, section, "mix"
-            )
-            allmix_explicit = self._is_key_explicit_in_sources(
-                override_sources, section, "allmix"
-            )
+            mix_explicit = self._is_key_explicit_in_sources(override_sources, section, "mix")
+            allmix_explicit = self._is_key_explicit_in_sources(override_sources, section, "allmix")
 
             if mix_explicit:
                 canonical_value = mix_value
@@ -139,9 +131,7 @@ class ConfigLoader:
         return config
 
     @staticmethod
-    def _is_key_explicit_in_sources(
-        sources: List[Dict[str, Any]], section: str, key: str
-    ) -> bool:
+    def _is_key_explicit_in_sources(sources: List[Dict[str, Any]], section: str, key: str) -> bool:
         for source in sources:
             if not isinstance(source, dict):
                 continue
@@ -170,16 +160,20 @@ class ConfigLoader:
         "path",
         "thread",
         "rate_limit",
+        "video",
         "cover",
         "music",
         "avatar",
         "json",
         "download_pinned",
+        "author_url",
+        "homepage_screenshot",
         "proxy",
         "retry_times",
         "folderstyle",
         "filename_template",
         "folder_template",
+        "video_quality",
         "comments",
         "live",
         "transcript",
@@ -204,9 +198,7 @@ class ConfigLoader:
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            logger.warning(
-                "Cannot create config directory %s: %s", target.parent, exc
-            )
+            logger.warning("Cannot create config directory %s: %s", target.parent, exc)
             return False
 
         existing: Dict[str, Any] = {}
@@ -238,12 +230,25 @@ class ConfigLoader:
 
         try:
             with open(target, "w", encoding="utf-8") as handle:
-                yaml.safe_dump(
-                    existing, handle, allow_unicode=True, sort_keys=False
-                )
+                yaml.safe_dump(existing, handle, allow_unicode=True, sort_keys=False)
         except OSError as exc:
             logger.warning("Failed to write config %s: %s", target, exc)
             return False
+
+        # ``transcript.api_key`` (Requirement 5) and other potentially
+        # sensitive fields land inside this file as plaintext. On POSIX
+        # we tighten permissions to 0o600 (owner read/write only) right
+        # after the write so a co-located malicious process or another
+        # local user can't ``cat`` the key. On Windows we skip — POSIX
+        # mode bits aren't meaningful, ACLs are the right knob, and
+        # changing them belongs to a separate hardening task.
+        if sys.platform != "win32":
+            try:
+                os.chmod(target, 0o600)
+            except OSError as exc:
+                logger.warning(
+                    "settings_chmod_failed: path=%s error=%r", target, exc
+                )
         return True
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -283,9 +288,7 @@ class ConfigLoader:
 
     def _candidate_auto_cookie_paths(self) -> List[Path]:
         config_dir = (
-            Path(self.config_path).resolve().parent
-            if self.config_path
-            else Path.cwd().resolve()
+            Path(self.config_path).resolve().parent if self.config_path else Path.cwd().resolve()
         )
         search_roots = [
             config_dir,
@@ -366,10 +369,13 @@ class ConfigLoader:
             value = self.config.get(field)
             if value and isinstance(value, str):
                 from datetime import datetime
+
                 try:
                     datetime.strptime(value, "%Y-%m-%d")
                 except ValueError:
-                    logger.warning("Invalid %s format: %s (expected YYYY-MM-DD), clearing", field, value)
+                    logger.warning(
+                        "Invalid %s format: %s (expected YYYY-MM-DD), clearing", field, value
+                    )
                     self.config[field] = ""
 
         return True

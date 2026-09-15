@@ -1,15 +1,34 @@
 # 抖音下载器 V2.0（Douyin Downloader）
 
 <p align="center">
-  <img src="https://socialify.git.ci/jiji262/douyin-downloader/image?custom_description=%E6%8A%96%E9%9F%B3%E6%89%B9%E9%87%8F%E4%B8%8B%E8%BD%BD%E5%B7%A5%E5%85%B7%EF%BC%8C%E5%8E%BB%E6%B0%B4%E5%8D%B0%EF%BC%8C%E6%94%AF%E6%8C%81%E8%A7%86%E9%A2%91%E3%80%81%E5%9B%BE%E9%9B%86%E3%80%81%E4%BD%9C%E8%80%85%E4%B8%BB%E9%A1%B5%E6%89%B9%E9%87%8F%E4%B8%8B%E8%BD%BD%E3%80%82&description=1&font=Jost&forks=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2Fjiji262%2Fdouyin-downloader%2Frefs%2Fheads%2FV1.0%2Fimg%2Flogo.png&name=1&owner=1&pattern=Circuit+Board&pulls=1&stargazers=1&theme=Light" alt="douyin-downloader" width="820" />
+  <img src="https://socialify.git.ci/jiji262/douyin-downloader/image?custom_description=%E6%8A%96%E9%9F%B3%E6%89%B9%E9%87%8F%E4%B8%8B%E8%BD%BD%E5%B7%A5%E5%85%B7%EF%BC%8C%E5%8E%BB%E6%B0%B4%E5%8D%B0%EF%BC%8C%E6%94%AF%E6%8C%81%E8%A7%86%E9%A2%91%E3%80%81%E5%9B%BE%E9%9B%86%E3%80%81%E4%BD%9C%E8%80%85%E4%B8%BB%E9%A1%B5%E6%89%B9%E9%87%8F%E4%B8%8B%E8%BD%BD%E3%80%82&description=1&font=Jost&forks=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2Fjiji262%2Fdouyin-downloader%2Frefs%2Fheads%2Fmain%2Fimg%2Flogo.png&name=1&owner=1&pattern=Circuit+Board&pulls=1&stargazers=1&theme=Light" alt="douyin-downloader" width="820" />
 </p>
 
 一个面向实用场景的抖音下载工具，支持视频、图文、合集、音乐、收藏夹等多种类型下载，以及作者主页批量下载，默认带进度展示、重试、数据库去重、下载完整性校验和浏览器兜底能力。
 
-> 当前文档对应 **V2.0（main 分支）**。
-> 如需使用旧版，请切回 **V1.0**：`git fetch --all && git switch V1.0`
+## 桌面版（Douzy）
+
+基于同一套后端打造的桌面客户端，为抖音、TikTok、YouTube 提供独立工作台。粘贴链接即可开始下载，同步账号内容，可视化跟踪任务，并在本地档案中统一管理已下载作品。
+
+- **三平台工作台：** 抖音视频、图文、主页与合集；TikTok 视频、图集与主页；YouTube 视频、Shorts、频道与播放列表
+- **账号内容：** 同步抖音关注、收藏夹、收藏合集与喜欢列表
+- **可视化管理：** 多链接队列、任务状态与重试、本地下载档案、筛选与快速重新下载
+
+> **内测中：** 桌面版目前处于内测期，如需使用，请到 [Releases](https://github.com/jiji262/douyin-downloader/releases) 页面下载安装文件。
+
+| **抖音链接下载** | **TikTok 下载工作台** | **YouTube 工作台** |
+|:---:|:---:|:---:|
+| ![Douzy 抖音链接下载工作台](img/desktop/001.png) | ![Douzy TikTok 下载工作台](img/desktop/002.png) | ![Douzy YouTube 工作台](img/desktop/003.png) |
+| 粘贴视频、图文、主页或合集链接，一键开始下载。 | 无需登录即可下载公开视频、图集与主页内容。 | 扫描视频、Shorts、频道与播放列表，可配置视频、MP3 或字幕下载。 |
+| **关注管理** | **收藏与喜欢** | **任务中心** |
+| ![Douzy 关注管理](img/desktop/004.png) | ![Douzy 收藏与喜欢](img/desktop/005.png) | ![Douzy 任务中心](img/desktop/006.png) |
+| 同步博主、筛选新作品、添加备注，并直接下载。 | 浏览当前抖音账号的收藏视频、收藏合集与喜欢作品。 | 查看任务结果、重试失败项，并快速打开输出目录。 |
+
+_截图来自当前桌面端 `main` 构建；为保护隐私，界面内容使用演示数据。_
 
 ## 功能概览
+
+> **⚠️ 抖音风控升级：CLI 已无法下载点赞 / 收藏夹 / 收藏合集（2026-08 起）以及单个视频 / 图文、合集、音乐（2026-09 起）；用户主页作品只能依赖浏览器兜底。** 原因与仍可用的功能见下方[限制说明](#限制说明)；这些下载请改用桌面版 Douzy。
 
 ### 已支持
 
@@ -45,6 +64,18 @@
 
 ### 限制说明
 
+- **抖音 Argus 风控门禁**：抖音边缘的 `ArgusSecurityPlugin` 对以下接口的非浏览器请求一律返回
+  HTTP 403 `Blocked by ArgusSecurityPlugin Uifid Not Found`，带不带 Cookie、重试多少次都一样：
+  - 2026-08 起：`aweme/favorite`、`collects/*`、`aweme/listcollection`、`mix/listcollection`（点赞 / 收藏夹 / 收藏合集）
+  - 2026-09-10 起：`mix/aweme`（合集作品列表）
+  - 2026-09-14 起：`aweme/detail`（单个视频 / 图文）、`aweme/post`（主页作品）、`mix/detail`、`mix/list`、
+    `music/detail`、`music/aweme`、`music/list`
+
+  放行所需的 `x-secsdk-web-signature` 只能由抖音网页内的 SDK 生成，CLI 的 API 直连请求无法带上，因此单个视频 / 图文、
+  合集、音乐以及点赞 / 收藏类下载在 CLI 中**无法使用**。主页作品（`post`）的 API 翻页同样被拒；安装 `playwright` 并保持
+  `browser_fallback` 开启（默认有头）时，浏览器兜底读取的是页面自己发出的作品列表请求，可能仍能取到，但尚未针对该门禁实测。
+  桌面版 Douzy 通过内置的登录窗口代发这些请求，不受影响。2026-09-14 实测仍可直连的接口：用户资料、关注列表、
+  评论列表、直播间（webcast）、热搜榜与搜索。
 - 浏览器兜底当前仅针对 `post` 完整验证，`like/mix/music` 主要依赖 API 正常分页
 - `number.allmix` / `increase.allmix` 作为兼容别名保留，运行时会归一化到 `mix`
 - `collect` / `collectmix` 当前仅支持当前已登录 Cookie 对应账号
@@ -532,7 +563,7 @@ rm dy_downloader.db
 
 ### 2) 进度条出现重复刷屏怎么办？
 
-默认 `progress.quiet_logs: true` 会在进度阶段静默日志。
+默认 `progress.quiet_logs: true` 会在进度阶段静默日志。  
 调试时再临时加 `--show-warnings` 或 `-v`。
 
 ### 3) Cookie 失效怎么办？
@@ -558,20 +589,11 @@ python -m tools.cookie_fetcher --config config.yml
 sqlite3 dy_downloader.db "SELECT aweme_id, title, author_name, datetime(download_time, 'unixepoch', 'localtime') FROM aweme ORDER BY download_time DESC LIMIT 20;"
 ```
 
-## 旧版切换（V1.0）
-
-如果你要继续使用老脚本风格（V1.0），可切换到旧分支：
-
-```bash
-git fetch --all
-git switch V1.0
-```
-
 ## 沟通群
 
-<img src="./img/fuye.jpg" alt="qun" width="360" />
+<img src="./img/fuye.jpg" alt="qun" width="240" />
 
-点击链接加入群聊【QQ群】：[https://qm.qq.com/q/GDCzZCO3mM](https://qm.qq.com/q/GDCzZCO3mM)
+点击链接加入群聊【QQ群】：[https://qm.qq.com/q/9xoNt8Wzv4](https://qm.qq.com/q/9xoNt8Wzv4)
 
 
 ## 免责声明
@@ -588,3 +610,7 @@ git switch V1.0
 ## 许可证
 
 本项目采用 MIT License，详见 [LICENSE](./LICENSE)。
+
+## 友情链接
+
+- [LINUX DO](https://linux.do/)

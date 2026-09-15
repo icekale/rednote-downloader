@@ -3,10 +3,13 @@ link:
 
 path: ./Downloaded/
 
-music: true
-cover: true
-avatar: true
-json: true
+# 是否下载视频文件；关闭后仍可按下方开关保存原始封面、音乐、头像或 JSON。
+# 默认只保存视频本体，其余附带产物按需打开。
+video: true
+music: false
+cover: false
+avatar: false
+json: false
 
 start_time: ""
 end_time: ""
@@ -20,8 +23,21 @@ folderstyle: true
 filename_template: "{date}_{title}_{id}"
 folder_template: "{date}_{title}_{id}"
 
+# 作者目录层命名方式。可选值：
+#   nickname     - 仅作者昵称（默认，最直观，但重名会合并、改名会分裂）
+#   sec_uid      - 作者 sec_uid（稳定唯一，但不直观）
+#   nickname_uid - 昵称_sec_uid（直观 + 唯一，推荐重度用户）
+# 切换只影响后续下载，不会迁移已存在的目录。
+author_dir: "nickname"
+
 # 默认不下载作者主页置顶作品；如需包含置顶，改为 true
 download_pinned: false
+
+# 下载博主作品时，在作者根目录覆盖保存主页地址文本
+author_url: false
+
+# 下载博主作品时，在作者根目录覆盖保存一张主页首屏截图
+homepage_screenshot: false
 
 mode:
   - post
@@ -35,18 +51,38 @@ number:
   collect: 0
   collectmix: 0
 
+# 增量任务的磁盘主文件缺失时是否重新下载：
+# true  保持当前行为，文件缺失或为空时重新下载；
+# false 数据库仍有有效下载记录时跳过（数据库不可用或记录已删除时仍会下载）。
+redownload_missing_files: true
+
+# 各模式是否启用增量下载：true 跳过已判定为下载过的作品；
+# false 重新下载并覆盖当前筛选范围内的作品。
 increase:
-  post: false
-  like: false
-  allmix: false
-  mix: false
-  music: false
+  post: true
+  like: true
+  allmix: true
+  mix: true
+  music: true
 
 thread: 5
 retry_times: 3
 proxy: ""
 database: true
 database_path: dy_downloader.db
+
+# 视频下载画质。抖音 API 为每个视频返回多档码率，此选项决定选用哪一档：
+#   original                 - 原画：探测上传原片（转码档列表之外，可比最高
+#                              转码档大数倍），比转码档大则优先下载原片，探测
+#                              失败时退回最高转码档。代价是每条作品多一次探测
+#                              请求（超时 10s）
+#   highest                  - 最高转码档（默认）：只在 bit_rate 阶梯里挑，
+#                              不发探测请求
+#   lowest                   - 最低可用档（省流量）
+#   1440p / 1080p / 720p / 540p / 480p / 360p
+#                            - 指定分辨率，匹配不到时自动降级到最接近的可用档
+# 实际可用档位取决于原视频上传质量。
+video_quality: highest
 
 progress:
   quiet_logs: true

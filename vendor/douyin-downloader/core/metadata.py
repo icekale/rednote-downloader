@@ -8,7 +8,44 @@ aweme dict shapes returned by the upstream API.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, List, Mapping, Optional
+from urllib.parse import quote
+
+_VIDEO_COVER_KEYS = (
+    "origin_cover",
+    "cover_original_scale",
+    "cover",
+)
+
+_AUTHOR_HOME_URL_PREFIX = "https://www.douyin.com/user/"
+
+
+def extract_video_cover_urls(aweme: Optional[Mapping[str, Any]]) -> List[str]:
+    """Return the best available static cover mirrors for a video aweme.
+
+    Douyin exposes both preview-sized ``video.cover`` and higher-quality
+    variants. Prefer ``origin_cover`` (the original static cover), then the
+    occasionally returned ``cover_original_scale``, and retain ``cover`` as a
+    compatibility fallback for older payloads.
+    """
+
+    if not isinstance(aweme, Mapping):
+        return []
+    video = aweme.get("video")
+    if not isinstance(video, Mapping):
+        return []
+
+    for key in _VIDEO_COVER_KEYS:
+        source = video.get(key)
+        if not isinstance(source, Mapping):
+            continue
+        url_list = source.get("url_list") or source.get("urlList")
+        if not isinstance(url_list, list):
+            continue
+        urls = [item for item in url_list if isinstance(item, str) and item]
+        if urls:
+            return urls
+    return []
 
 
 def extract_author_sec_uid(aweme: Optional[Mapping[str, Any]]) -> Optional[str]:
@@ -32,3 +69,20 @@ def extract_author_sec_uid(aweme: Optional[Mapping[str, Any]]) -> Optional[str]:
         return None
     sec_uid = sec_uid.strip()
     return sec_uid or None
+
+
+def build_author_home_url(sec_uid: Optional[str]) -> Optional[str]:
+    """Return the canonical Douyin homepage URL for ``sec_uid``, else ``None``.
+
+    The Python twin of ``desktop/src/renderer/utils/buildAuthorHomeUrl.ts`` —
+    same trim, same "unusable input yields no URL" contract, and the same
+    percent-encoding so a malformed ``sec_uid`` cannot smuggle an extra path
+    segment or query string into the URL.
+    """
+
+    if not isinstance(sec_uid, str):
+        return None
+    sec_uid = sec_uid.strip()
+    if not sec_uid:
+        return None
+    return f"{_AUTHOR_HOME_URL_PREFIX}{quote(sec_uid, safe='')}"

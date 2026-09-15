@@ -1,12 +1,42 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Set
+import sys
+import time
+from importlib.util import find_spec
+from typing import Any, Callable, Dict, List, Optional, Set
 
+import aiofiles
+
+from core.api_client import DouyinAPIClient
 from core.downloader_base import BaseDownloader, DownloadResult
+from core.metadata import build_author_home_url
 from core.user_mode_registry import UserModeRegistry
+from core.user_modes.base_strategy import PageRequestFailedError
 from utils.logger import setup_logger
 
 logger = setup_logger("UserDownloader")
+
+_BROWSER_DISABLED_REASON = "已在设置中关闭"
+# 打包版用 ``--exclude-module=playwright`` 裁掉了浏览器组件，用户装不上；源码
+# 运行（含 CLI）时 playwright 只是没装的可选依赖，装上就能用。两句话不能混。
+_BROWSER_BACKEND_MISSING_REASON = "当前版本未内置浏览器组件"
+_BROWSER_BACKEND_UNINSTALLED_REASON = "未安装浏览器组件（pip install playwright 后重试）"
+
+
+def _user_info_summary(user_info: Dict[str, Any]) -> Dict[str, Any]:
+    safe_keys = (
+        "uid",
+        "sec_uid",
+        "short_id",
+        "unique_id",
+        "nickname",
+        "aweme_count",
+        "favoriting_count",
+        "follower_count",
+        "following_count",
+        "total_favorited",
+    )
+    return {key: user_info.get(key) for key in safe_keys if key in user_info}
 
 
 class UserDownloader(BaseDownloader):
@@ -18,57 +48,251 @@ class UserDownloader(BaseDownloader):
         self._mode_strategy_cache: Dict[str, Any] = {}
 
     async def download(self, parsed_url: Dict[str, Any]) -> DownloadResult:
-        result = DownloadResult()
-
+        download_started = time.monotonic()
         sec_uid = parsed_url.get("sec_uid")
         if not sec_uid:
-            # URL parser already validates this; treat as fatal instead of
-            # a silent empty result so the UI surfaces a real error rather
-            # than "已完成 0 项".
             raise RuntimeError("无法从链接中解析出用户 ID，请确认链接是否完整")
 
-        modes_config = self.config.get("mode", ["post"])
-        if isinstance(modes_config, str):
-            modes = [modes_config]
-        elif isinstance(modes_config, list):
-            modes = [str(mode).strip() for mode in modes_config if str(mode).strip()]
-        else:
-            modes = ["post"]
-
+        modes = self._configured_modes()
         if not self._validate_mode_scope(sec_uid, modes):
-            return result
+            return DownloadResult()
 
-        user_info = await self._resolve_user_info(sec_uid, modes)
-        if not user_info:
-            logger.error("Failed to get user info: %s", sec_uid)
-            # Raising here instead of returning an empty result means the
-            # job ends in `failed` state with a clear message. Returning
-            # {total:0,success:0,failed:0} made JobManager mark it as
-            # `success`, which rendered as "已完成 0 项" — a silent failure
-            # that's indistinguishable from "nothing happened" in the UI.
-            raise RuntimeError(
-                "获取用户信息失败，请检查 Cookie 是否有效或重新登录抖音"
-            )
+        sec_uid = await self._resolve_self_alias(sec_uid, modes)
 
+        logger.info(
+            "User download started: sec_uid=%s modes=%s number=%s increase=%s",
+            sec_uid,
+            modes,
+            self.config.get("number", {}),
+            self.config.get("increase", {}),
+        )
+        user_info = await self._resolve_user_info_logged(sec_uid, modes)
+        self._progress_report_author(
+            nickname=user_info.get("nickname"),
+            sec_uid=user_info.get("sec_uid") or sec_uid,
+        )
+        await self._save_author_home_url(sec_uid, user_info, modes)
+        await self._save_homepage_screenshot(sec_uid, user_info, modes)
         self._progress_update_step("下载模式", f"模式: {', '.join(modes)}")
 
+        result = await self._download_all_modes(modes, sec_uid, user_info)
+
+        logger.info(
+            "User download finished: duration_ms=%s total=%s success=%s failed=%s skipped=%s",
+            int((time.monotonic() - download_started) * 1000),
+            result.total,
+            result.success,
+            result.failed,
+            result.skipped,
+        )
+        return result
+
+    async def _download_all_modes(
+        self, modes: List[str], sec_uid: str, user_info: Dict[str, Any]
+    ) -> DownloadResult:
+        """依次跑完每个模式；中途某个模式翻页失败时保住前面模式的成果。
+
+        让异常穿过 ``download()`` 等于把整个 ``result`` 丢掉：server/jobs.py
+        只在正常返回分支写计数（docs/spec/gotchas.md「计数器恒为 0」），用户会
+        在 500 个文件已经落盘的情况下看到「失败 · 0 项」。改成记下原因后收工，
+        与 post 走查的软信号（``incomplete_reason``）语义一致。
+        第一个模式就失败时没有成果可保，照旧抛出去按失败结案——否则就成了
+        更糟的「成功 0 项」。
+        """
+        result = DownloadResult()
         seen_aweme_ids: Set[str] = set()
         for mode in modes:
-            strategy = self._get_mode_strategy(mode)
-            if strategy is None:
-                logger.warning("Unsupported user mode: %s", mode)
+            try:
+                mode_result = await self._download_mode_logged(
+                    mode, sec_uid, user_info, seen_aweme_ids
+                )
+            except PageRequestFailedError as exc:
+                logger.warning("User mode aborted by a failed page: mode=%s reason=%s", mode, exc)
+                if result.total <= 0 and not result.incomplete_reason:
+                    raise
+                # 硬失败的原因要盖过前面模式的软提示（后者只是「没取全」，
+                # 前者是「这个模式整个没跑成」），但仍继续跑剩下的模式：
+                # 一个模式被限流不代表另一个模式也拿不到。
+                result.incomplete_reason = str(exc)
                 continue
-
-            self._progress_update_step("下载模式", f"开始处理 {mode} 作品")
-            mode_result = await strategy.download_mode(
-                sec_uid, user_info, seen_aweme_ids=seen_aweme_ids
-            )
-            result.total += mode_result.total
-            result.success += mode_result.success
-            result.failed += mode_result.failed
-            result.skipped += mode_result.skipped
-
+            if mode_result is not None:
+                self._merge_result(result, mode_result)
         return result
+
+    async def _resolve_self_alias(self, sec_uid: str, modes: List[str]) -> str:
+        """把 ``/user/self`` 里的 ``self`` 换成登录账号真实 sec_uid。
+
+        抖音网页版自己主页的地址栏形态是 ``/user/self``，``self`` 是"当前
+        登录者"的别名而不是 sec_uid：直接透传给
+        ``/aweme/v1/web/user/profile/other/?sec_user_id=self`` 会拿到
+        ``status_code=2 UserId不合法``、``user={}``，旧代码把这个空结果当成
+        "用户信息拿不到"，抛出误导性的 Cookie 失效错误。
+
+        收藏夹模式（collect/collectmix）按 cookie 身份分页，不需要真实
+        sec_uid，保持 ``self`` 原样走既有分支。
+        """
+        if sec_uid != "self":
+            return sec_uid
+
+        normalized_modes = {str(mode or "").strip() for mode in modes}
+        if normalized_modes.issubset(self.SELF_COLLECT_MODES):
+            return sec_uid
+
+        self._progress_update_step("识别账号", "解析当前登录账号主页")
+        try:
+            self_info = await self.api_client.get_self_info()
+        except Exception as exc:  # noqa: BLE001 - 任何失败都归为"解析不出账号"
+            logger.warning("Resolve /user/self failed: %s", exc)
+            self_info = None
+
+        resolved = str((self_info or {}).get("sec_uid") or "").strip()
+        if not resolved:
+            raise RuntimeError(
+                "无法识别当前登录账号，请重新登录抖音，"
+                "或改用自己主页的完整链接（形如 https://www.douyin.com/user/MS4w...）"
+            )
+        logger.info("Resolved /user/self alias: sec_uid=%s", resolved)
+        return resolved
+
+    async def _save_author_home_url(
+        self,
+        sec_uid: str,
+        user_info: Dict[str, Any],
+        modes: List[str],
+    ) -> None:
+        if not self._as_bool(self.config.get("author_url", False)):
+            return
+
+        normalized_modes = {str(mode or "").strip() for mode in modes}
+        if sec_uid == "self" or normalized_modes.issubset(self.SELF_COLLECT_MODES):
+            return
+
+        effective_sec_uid = str(user_info.get("sec_uid") or sec_uid).strip()
+        author_url = build_author_home_url(effective_sec_uid)
+        if not author_url or effective_sec_uid == "self":
+            logger.warning("Author homepage URL skipped because sec_uid is unavailable")
+            return
+
+        author_name = str(user_info.get("nickname") or "unknown")
+        try:
+            author_dir = self.file_manager.get_author_dir(
+                author_name,
+                author_sec_uid=effective_sec_uid,
+                author_dir_style=self.config.get("author_dir") or "nickname",
+            )
+            async with aiofiles.open(
+                (author_dir / "author_url.txt").resolve(), "w", encoding="utf-8"
+            ) as output:
+                await output.write(f"{author_url}\n")
+        except Exception as exc:
+            logger.warning("Author homepage URL failed for %s: %s", effective_sec_uid, exc)
+
+    async def _save_homepage_screenshot(
+        self,
+        sec_uid: str,
+        user_info: Dict[str, Any],
+        modes: List[str],
+    ) -> None:
+        if not self._as_bool(self.config.get("homepage_screenshot", False)):
+            return
+
+        normalized_modes = {str(mode or "").strip() for mode in modes}
+        if sec_uid == "self" or normalized_modes.issubset(self.SELF_COLLECT_MODES):
+            return
+
+        effective_sec_uid = str(user_info.get("sec_uid") or sec_uid).strip()
+        if not effective_sec_uid or effective_sec_uid == "self":
+            logger.warning("Homepage screenshot skipped because sec_uid is unavailable")
+            return
+
+        author_name = str(user_info.get("nickname") or "unknown")
+        try:
+            author_dir = self.file_manager.get_author_dir(
+                author_name,
+                author_sec_uid=effective_sec_uid,
+                author_dir_style=self.config.get("author_dir") or "nickname",
+            )
+            saved = await self.api_client.save_user_homepage_screenshot(
+                effective_sec_uid,
+                (author_dir / "主页截图.png").resolve(),
+                profile=user_info,
+            )
+            if not saved:
+                logger.warning("Homepage screenshot was not saved for %s", effective_sec_uid)
+        except Exception as exc:
+            logger.warning("Homepage screenshot failed for %s: %s", effective_sec_uid, exc)
+
+    def _configured_modes(self) -> List[str]:
+        modes_config = self.config.get("mode", ["post"])
+        if isinstance(modes_config, str):
+            return [modes_config]
+        if isinstance(modes_config, list):
+            return [str(mode).strip() for mode in modes_config if str(mode).strip()]
+        return ["post"]
+
+    async def _resolve_user_info_logged(self, sec_uid: str, modes: List[str]) -> Dict[str, Any]:
+        started = time.monotonic()
+        user_info = await self._resolve_user_info(sec_uid, modes)
+        if not user_info:
+            logger.error(
+                "Failed to get user info: sec_uid=%s duration_ms=%s",
+                sec_uid,
+                int((time.monotonic() - started) * 1000),
+            )
+            raise RuntimeError("获取用户信息失败，请检查 Cookie 是否有效或重新登录抖音")
+        logger.info(
+            "User info resolved: duration_ms=%s summary=%s",
+            int((time.monotonic() - started) * 1000),
+            _user_info_summary(user_info),
+        )
+        return user_info
+
+    async def _download_mode_logged(
+        self,
+        mode: str,
+        sec_uid: str,
+        user_info: Dict[str, Any],
+        seen_aweme_ids: Set[str],
+    ) -> Optional[DownloadResult]:
+        strategy = self._get_mode_strategy(mode)
+        if strategy is None:
+            logger.warning("Unsupported user mode: %s", mode)
+            return None
+        self._progress_update_step("下载模式", f"开始处理 {mode} 作品")
+        started = time.monotonic()
+        logger.info("User mode started: mode=%s strategy=%s", mode, type(strategy).__name__)
+        result = await strategy.download_mode(sec_uid, user_info, seen_aweme_ids=seen_aweme_ids)
+        # 列表被限流截断时 failed 恒为 0，任务会被判成 SUCCESS；把策略记下
+        # 的原因搬到结果上，让宿主任务有机会告诉用户「这次没取全」。
+        incomplete_reason = getattr(strategy, "incomplete_reason", None)
+        if incomplete_reason:
+            result.incomplete_reason = str(incomplete_reason)
+            logger.warning(
+                "User mode returned an incomplete listing: mode=%s reason=%s",
+                mode,
+                incomplete_reason,
+            )
+        logger.info(
+            "User mode finished: mode=%s duration_ms=%s total=%s success=%s "
+            "failed=%s skipped=%s unique_seen=%s",
+            mode,
+            int((time.monotonic() - started) * 1000),
+            result.total,
+            result.success,
+            result.failed,
+            result.skipped,
+            len(seen_aweme_ids),
+        )
+        return result
+
+    @staticmethod
+    def _merge_result(target: DownloadResult, source: DownloadResult) -> None:
+        target.total += source.total
+        target.success += source.success
+        target.failed += source.failed
+        target.skipped += source.skipped
+        if source.incomplete_reason and not target.incomplete_reason:
+            target.incomplete_reason = source.incomplete_reason
 
     def _validate_mode_scope(self, sec_uid: str, modes: List[str]) -> bool:
         normalized_modes = {str(mode or "").strip() for mode in modes}
@@ -76,14 +300,25 @@ class UserDownloader(BaseDownloader):
         has_regular_mode = bool(normalized_modes - self.SELF_COLLECT_MODES)
 
         if has_collect_mode and sec_uid != "self":
-            logger.error(
-                "Modes collect/collectmix only support /user/self?showTab=favorite_collection"
-            )
-            return False
+            # Desktop "我的内容 / 下载本收藏夹" sends the real self sec_uid
+            # together with a ``collects_id`` filter — by the time the
+            # request reaches here the sidecar has already verified via
+            # the cookie scope (``_resolve_viewer_sec_uid``) that the
+            # caller is the logged-in user, so a real sec_uid + collect
+            # mode + collects_id is the legit my-content path. Without
+            # this branch ``download()`` would short-circuit and produce
+            # an empty DownloadResult, which the JobManager renders as
+            # the silent "已完成 0 项" failure.
+            collects_id = (str(self.config.get("collects_id") or "")).strip()
+            if not collects_id:
+                logger.error(
+                    "Modes collect/collectmix only support "
+                    "/user/self?showTab=favorite_collection or "
+                    "my-content 下载本收藏夹 (collects_id required)"
+                )
+                return False
         if has_collect_mode and has_regular_mode:
-            logger.error(
-                "Modes collect/collectmix cannot be combined with post/like/mix/music"
-            )
+            logger.error("Modes collect/collectmix cannot be combined with post/like/mix/music")
             return False
         return True
 
@@ -108,9 +343,7 @@ class UserDownloader(BaseDownloader):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
 
-    async def _resolve_user_info(
-        self, sec_uid: str, modes: List[str]
-    ) -> Optional[Dict[str, Any]]:
+    async def _resolve_user_info(self, sec_uid: str, modes: List[str]) -> Optional[Dict[str, Any]]:
         normalized_modes = {str(mode or "").strip() for mode in modes}
         if sec_uid == "self" and normalized_modes.issubset(self.SELF_COLLECT_MODES):
             self._progress_update_step("获取作者信息", "使用当前登录账号收藏夹上下文")
@@ -120,11 +353,36 @@ class UserDownloader(BaseDownloader):
                 "nickname": "self",
             }
 
+        # Desktop my-content "下载本收藏夹" path: real sec_uid + collect
+        # mode + collects_id filter. The cookie scope upstream already
+        # guarantees this is the viewer themselves, so we can skip the
+        # network round-trip via ``api_client.get_user_info``.
+        if (
+            normalized_modes.issubset(self.SELF_COLLECT_MODES)
+            and (str(self.config.get("collects_id") or "")).strip()
+        ):
+            self._progress_update_step("获取作者信息", "使用当前登录账号收藏夹上下文")
+            return {
+                "uid": sec_uid,
+                "sec_uid": sec_uid,
+                "nickname": "self",
+            }
+
         self._progress_update_step("获取作者信息", f"sec_uid={sec_uid}")
         return await self.api_client.get_user_info(sec_uid)
 
     def _get_mode_strategy(self, mode: str):
         normalized_mode = (mode or "").strip()
+
+        # The "collect" strategy supports an optional ``collects_id`` filter
+        # that constrains paging to a single folder (desktop "我的收藏 / 下载
+        # 本收藏夹"). When the filter is set we bypass the cache so the next
+        # call with a different (or absent) filter doesn't reuse a stale
+        # strategy bound to the previous folder. The no-filter path keeps
+        # caching to preserve the existing CLI behaviour.
+        if normalized_mode == "collect":
+            return self._make_collect_strategy()
+
         if normalized_mode in self._mode_strategy_cache:
             return self._mode_strategy_cache[normalized_mode]
 
@@ -136,12 +394,38 @@ class UserDownloader(BaseDownloader):
         self._mode_strategy_cache[normalized_mode] = strategy
         return strategy
 
+    def _make_collect_strategy(self):
+        """Construct the collect strategy, threading ``collects_id`` from
+        the per-job config when present. Caches only the no-filter path
+        (matching the historic CLI behaviour) so a subsequent call with a
+        different filter doesn't pick up a stale binding.
+        """
+        strategy_cls = self.mode_registry.get("collect")
+        if strategy_cls is None:
+            return None
+
+        raw_filter = self.config.get("collects_id")
+        collects_id = (str(raw_filter).strip() if raw_filter is not None else "") or None
+
+        if collects_id is None:
+            cached = self._mode_strategy_cache.get("collect")
+            if cached is not None:
+                return cached
+            strategy = strategy_cls(self)
+            self._mode_strategy_cache["collect"] = strategy
+            return strategy
+
+        # Filtered path is request-scoped — never cached.
+        return strategy_cls(self, collects_id=collects_id)
+
     async def _download_mode_items(
         self,
         mode: str,
         items: List[Dict[str, Any]],
         author_name: str,
         seen_aweme_ids: Optional[Set[str]] = None,
+        *,
+        author_sec_uid: Optional[str] = None,
     ) -> DownloadResult:
         if seen_aweme_ids is None:
             seen_aweme_ids = set()
@@ -166,15 +450,35 @@ class UserDownloader(BaseDownloader):
         # Accumulate per-aweme DB records and flush in a single transaction
         # at the end — avoids one fsync per item across the whole batch.
         db_batch: Optional[List[Dict[str, Any]]] = [] if self.database else None
+        increase_config = self.config.get("increase", {})
+        force_download = (
+            isinstance(increase_config, dict)
+            and mode in increase_config
+            and not bool(increase_config.get(mode))
+        )
 
         async def _process_aweme(item: Dict[str, Any]):
             aweme_id = item.get("aweme_id")
-            if not await self._should_download(str(aweme_id or "")):
-                self._progress_advance_item("skipped", str(aweme_id or "unknown"))
-                return {"status": "skipped", "aweme_id": aweme_id}
+            if not await self._should_download(
+                str(aweme_id or ""),
+                force=force_download,
+            ):
+                saved = await self._collect_comments_for_existing_aweme(
+                    item,
+                    author_name,
+                    mode,
+                    author_sec_uid=author_sec_uid,
+                )
+                status = "success" if saved else "skipped"
+                self._progress_advance_item(status, str(aweme_id or "unknown"))
+                return {"status": status, "aweme_id": aweme_id}
 
             success = await self._download_aweme_assets(
-                item, author_name, mode=mode, db_batch=db_batch
+                item,
+                author_name,
+                mode=mode,
+                db_batch=db_batch,
+                author_sec_uid=author_sec_uid,
             )
             status = "success" if success else "failed"
             self._progress_advance_item(status, str(aweme_id or "unknown"))
@@ -183,9 +487,7 @@ class UserDownloader(BaseDownloader):
                 "aweme_id": aweme_id,
             }
 
-        download_results = await self.queue_manager.download_batch(
-            _process_aweme, deduped_items
-        )
+        download_results = await self.queue_manager.download_batch(_process_aweme, deduped_items)
 
         if db_batch:
             await self.database.add_aweme_batch(db_batch)
@@ -205,9 +507,7 @@ class UserDownloader(BaseDownloader):
         return result
 
     # 向后兼容：旧测试仍直接调用 post 下载入口。
-    async def _download_user_post(
-        self, sec_uid: str, user_info: Dict[str, Any]
-    ) -> DownloadResult:
+    async def _download_user_post(self, sec_uid: str, user_info: Dict[str, Any]) -> DownloadResult:
         strategy = self._get_mode_strategy("post")
         if strategy is None:
             return DownloadResult()
@@ -218,18 +518,39 @@ class UserDownloader(BaseDownloader):
         sec_uid: str,
         user_info: Dict[str, Any],
         aweme_list: List[Dict[str, Any]],
+        *,
+        item_filter: Optional[Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
     ) -> None:
-        browser_cfg = self.config.get("browser_fallback", {}) or {}
-        if not browser_cfg.get("enabled", True):
+        unavailable_reason = self._browser_recovery_unavailable_reason()
+        if unavailable_reason:
+            self._progress_update_step("拉取作品列表", f"浏览器回补不可用（{unavailable_reason}）")
+            logger.warning("Browser fallback skipped: %s", unavailable_reason)
             return
 
+        browser_cfg = self.config.get("browser_fallback", {}) or {}
         number_limit = self.config.get("number", {}).get("post", 0)
         # 在分页受限场景下，user_info.aweme_count 常常不可靠（经常只返回 20）
-        # 因此仅在用户显式设置 number_limit 时才限制浏览器采集目标数量。
-        expected_count = int(number_limit or 0)
-        if expected_count and len(aweme_list) >= expected_count:
+        # 媒体筛选需要先拿到详情才能判断，不能用原始 ID 数提前截断。
+        expected_count = 0 if item_filter else int(number_limit or 0)
+        if self._post_recovery_limit_reached(aweme_list, number_limit, item_filter):
+            logger.info(
+                "Browser fallback skipped: number limit reached existing=%s limit=%s",
+                len(aweme_list),
+                number_limit,
+            )
             return
 
+        fallback_started = time.monotonic()
+        logger.info(
+            "Browser fallback started: existing=%s expected_count=%s headless=%s "
+            "max_scrolls=%s idle_rounds=%s timeout_s=%s",
+            len(aweme_list),
+            expected_count,
+            bool(browser_cfg.get("headless", False)),
+            int(browser_cfg.get("max_scrolls", 240) or 240),
+            int(browser_cfg.get("idle_rounds", 8) or 8),
+            int(browser_cfg.get("wait_timeout_seconds", 600) or 600),
+        )
         try:
             browser_aweme_ids = await self.api_client.collect_user_post_ids_via_browser(
                 sec_uid,
@@ -237,21 +558,20 @@ class UserDownloader(BaseDownloader):
                 headless=bool(browser_cfg.get("headless", False)),
                 max_scrolls=int(browser_cfg.get("max_scrolls", 240) or 240),
                 idle_rounds=int(browser_cfg.get("idle_rounds", 8) or 8),
-                wait_timeout_seconds=int(
-                    browser_cfg.get("wait_timeout_seconds", 600) or 600
-                ),
+                wait_timeout_seconds=int(browser_cfg.get("wait_timeout_seconds", 600) or 600),
             )
-        except Exception as exc:
-            logger.error("Browser fallback failed: %s", exc)
+        except Exception:
+            logger.exception(
+                "Browser fallback failed: duration_ms=%s",
+                int((time.monotonic() - fallback_started) * 1000),
+            )
             return
 
         browser_aweme_items: Dict[str, Dict[str, Any]] = {}
         browser_post_stats: Dict[str, int] = {}
         if hasattr(self.api_client, "pop_browser_post_aweme_items"):
             try:
-                browser_aweme_items = (
-                    self.api_client.pop_browser_post_aweme_items() or {}
-                )
+                browser_aweme_items = self.api_client.pop_browser_post_aweme_items() or {}
             except Exception as exc:
                 logger.debug("Fetch browser post items skipped: %s", exc)
         if hasattr(self.api_client, "pop_browser_post_stats"):
@@ -261,16 +581,23 @@ class UserDownloader(BaseDownloader):
                 logger.debug("Fetch browser post stats skipped: %s", exc)
 
         if not browser_aweme_ids:
-            logger.warning("Browser fallback returned no aweme_id")
+            logger.warning(
+                "Browser fallback returned no aweme_id: duration_ms=%s stats=%s",
+                int((time.monotonic() - fallback_started) * 1000),
+                browser_post_stats,
+            )
             return
 
-        existing_ids = {
-            str(item.get("aweme_id")) for item in aweme_list if item.get("aweme_id")
-        }
-        missing_ids = [
-            aweme_id for aweme_id in browser_aweme_ids if aweme_id not in existing_ids
-        ]
+        existing_ids = {str(item.get("aweme_id")) for item in aweme_list if item.get("aweme_id")}
+        missing_ids = [aweme_id for aweme_id in browser_aweme_ids if aweme_id not in existing_ids]
         if not missing_ids:
+            logger.info(
+                "Browser fallback found no missing items: browser_ids=%s existing=%s "
+                "duration_ms=%s",
+                len(browser_aweme_ids),
+                len(existing_ids),
+                int((time.monotonic() - fallback_started) * 1000),
+            )
             return
 
         logger.warning(
@@ -282,20 +609,25 @@ class UserDownloader(BaseDownloader):
         reused_from_browser_items = 0
         total_missing = len(missing_ids)
         for index, aweme_id in enumerate(missing_ids, start=1):
-            if number_limit > 0 and len(aweme_list) >= number_limit:
+            if self._post_recovery_limit_reached(aweme_list, number_limit, item_filter):
                 break
 
             if index == 1 or index == total_missing or index % 5 == 0:
-                self._progress_update_step(
-                    "浏览器回补", f"补全详情 {index}/{total_missing}"
-                )
+                self._progress_update_step("浏览器回补", f"补全详情 {index}/{total_missing}")
 
             detail = browser_aweme_items.get(str(aweme_id))
             if not detail:
-                await self.rate_limiter.acquire()
-                detail = await self.api_client.get_video_detail(
-                    aweme_id, suppress_error=True
-                )
+                try:
+                    await self.rate_limiter.acquire()
+                    detail = await self.api_client.get_video_detail(aweme_id, suppress_error=True)
+                except Exception as exc:
+                    detail_failed += 1
+                    logger.warning(
+                        "Browser fallback detail fetch failed for aweme_id=%s: %s",
+                        aweme_id,
+                        exc,
+                    )
+                    continue
                 if detail:
                     detail_success += 1
             else:
@@ -319,7 +651,9 @@ class UserDownloader(BaseDownloader):
             f"回补完成，复用 {reused_from_browser_items}，补拉成功 {detail_success}，失败 {detail_failed}",
         )
         logger.warning(
-            "Browser fallback summary: merged_ids=%s selected_ids=%s post_items=%s post_pages=%s reused=%s detail_success=%s detail_failed=%s",
+            "Browser fallback summary: duration_ms=%s merged_ids=%s selected_ids=%s "
+            "post_items=%s post_pages=%s reused=%s detail_success=%s detail_failed=%s",
+            int((time.monotonic() - fallback_started) * 1000),
             browser_post_stats.get("merged_ids", 0),
             browser_post_stats.get("selected_ids", len(browser_aweme_ids)),
             browser_post_stats.get("post_items", len(browser_aweme_items)),
@@ -328,10 +662,45 @@ class UserDownloader(BaseDownloader):
             detail_success,
             detail_failed,
         )
-
         if detail_failed > 0:
             logger.warning(
                 "Browser fallback detail fetch failed: %s/%s",
                 detail_failed,
                 total_missing,
             )
+
+    def _browser_recovery_unavailable_reason(self) -> Optional[str]:
+        """浏览器回补不可用时给出人话原因，可用时返回 None。"""
+        browser_cfg = self.config.get("browser_fallback", {}) or {}
+        if not browser_cfg.get("enabled", True):
+            return _BROWSER_DISABLED_REASON
+        if self._browser_backend_missing():
+            return self._browser_backend_missing_reason()
+        return None
+
+    @staticmethod
+    def _browser_backend_missing_reason() -> str:
+        if getattr(sys, "frozen", False):
+            return _BROWSER_BACKEND_MISSING_REASON
+        return _BROWSER_BACKEND_UNINSTALLED_REASON
+
+    def _browser_backend_missing(self) -> bool:
+        """真实 api_client 的回补依赖 playwright，发行版构建用
+        ``--exclude-module=playwright`` 把它裁掉了，运行时只会 ImportError
+        后返回空列表。测试 / 自定义客户端自带采集实现，不受此限。
+        """
+        if not isinstance(self.api_client, DouyinAPIClient):
+            return False
+        return find_spec("playwright") is None
+
+    @staticmethod
+    def _post_recovery_limit_reached(
+        items: List[Dict[str, Any]],
+        number_limit: Any,
+        item_filter: Optional[Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]],
+    ) -> bool:
+        limit = int(number_limit or 0)
+        if limit <= 0:
+            return False
+        eligible_items = item_filter(items) if item_filter else items
+        return len(eligible_items) >= limit

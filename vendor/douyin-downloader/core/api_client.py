@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import os
 import random
+import re
+import sys
+import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
 import aiohttp
+
 from auth import MsTokenManager
 from utils.cookie_utils import sanitize_cookies
-from utils.logger import setup_logger
+from utils.logger import safe_log_url, setup_logger
 from utils.xbogus import XBogus
 
 try:
@@ -19,32 +27,221 @@ except Exception:  # pragma: no cover - optional dependency
 
 logger = setup_logger("APIClient")
 
+_LOGIN_REQUIRED_STATUS_CODES = {2483}
+
+# Douyin fronts the web API with an edge WAF that answers 403 (and 429)
+# once a caller trips a rate-based risk-control rule. Both are transient:
+# the block is served in tens of milliseconds without reaching the
+# backend, and the *same* cookies succeed again after a cooldown. A real
+# logout never looks like this — Douyin reports those as HTTP 200 with a
+# non-zero ``status_code`` (see ``_is_login_required``), so retrying a
+# 403 cannot mask an expired session.
+#
+# These reuse the ordinary retry schedule on purpose. A longer WAF-specific
+# backoff was tried and reverted: ``_request_json`` is the chokepoint for
+# every Douyin call, so stretching it to ~20s per request blew past the
+# renderer's 15s timeout on the my-content routes and turned per-item loops
+# (``user_downloader``'s detail recovery) into multi-hour stalls. Callers
+# that walk many pages degrade gracefully on an exhausted fetch instead.
+_RISK_CONTROL_HTTP_STATUSES = frozenset({403, 429})
+
+# 每次尝试之间的退避秒数（第 N 次失败后等 delays[N-1]）。aiohttp 与 page
+# bridge 两条路共用同一档预算，理由见上面那段注释。
+_RETRY_DELAYS_SECONDS = (1, 2, 5)
+_MAX_ATTEMPTS = 3
+_SERVER_ERROR_MIN_STATUS = 500
+
+_HOMEPAGE_SCREENSHOT_BRIDGE_ENV = "DOUYIN_HOMEPAGE_SCREENSHOT_BRIDGE"
+_HOMEPAGE_SCREENSHOT_MESSAGE_PREFIX = "DOUYIN_HOMEPAGE_SCREENSHOT_REQUEST "
+_HOMEPAGE_PROFILE_READY_SCRIPT = r"""(expected) => {
+    const normalize = (value) => String(value ?? "")
+        .normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+    const readyKey = "__DOUYIN_HOMEPAGE_PROFILE_READY_STATE__";
+    const blockedKey = "__DOUYIN_HOMEPAGE_PROFILE_BLOCKED_REASON__";
+    const reset = () => {
+        delete window[readyKey];
+        return false;
+    };
+    if (document.readyState !== "complete" || !document.body) return reset();
+
+    const bodyText = normalize(document.body.innerText || document.body.textContent);
+    const blocked = ["验证码", "安全验证", "验证后继续", "页面不存在", "用户不存在",
+        "账号已注销"].find((marker) => bodyText.includes(normalize(marker)));
+    if (blocked) {
+        window[blockedKey] = blocked;
+        return reset();
+    }
+    delete window[blockedKey];
+
+    const visible = (element) => {
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" &&
+            style.opacity !== "0" && rect.width > 0 && rect.height > 0 &&
+            rect.bottom > 0 && rect.top < Math.max(window.innerHeight || 0, 900);
+    };
+    const numberToken = "(\\d+(?:[.,]\\d+)?(?:万|亿|w|k|m)?\\+?)";
+    const groups = [["关注"], ["粉丝"], ["获赞", "点赞"]];
+    const readStats = (text, direction) => groups.map((labels) => {
+        for (const label of labels) {
+            const normalizedLabel = normalize(label);
+            const pattern = direction === "before"
+                ? new RegExp(`${numberToken}${normalizedLabel}`)
+                : new RegExp(`${normalizedLabel}${numberToken}`);
+            const match = text.match(pattern);
+            if (match?.[1]) return match[1];
+        }
+        return "";
+    });
+    const expectedNickname = normalize(expected?.nickname);
+    const candidates = Array.from(
+        document.body.querySelectorAll("main, header, section, article, div")
+    ).filter(visible).map((element) => {
+        const text = normalize(element.innerText || element.textContent);
+        if (!text || text.length > 1500) return null;
+        const before = readStats(text, "before");
+        const after = readStats(text, "after");
+        const beforeCount = before.filter(Boolean).length;
+        const afterCount = after.filter(Boolean).length;
+        const values = afterCount >= beforeCount ? after : before;
+        if (!values[1] || Math.max(beforeCount, afterCount) < 2) return null;
+        if (expectedNickname && !text.includes(expectedNickname)) return null;
+        return {element, text, values};
+    }).filter(Boolean).sort((left, right) => left.text.length - right.text.length);
+    const profile = candidates[0];
+    if (!profile) return reset();
+    const images = Array.from(document.images).filter(visible);
+    if (images.some((image) => !image.complete)) return reset();
+    if (document.fonts && document.fonts.status !== "loaded") return reset();
+
+    const loaded = images.filter((image) => image.naturalWidth > 0).length;
+    const signature = profile.values.concat(String(loaded)).join("|");
+    const previous = window[readyKey];
+    const count = previous?.signature === signature ? previous.count + 1 : 1;
+    window[readyKey] = {signature, count};
+    return count >= 3;
+}"""
+_HOMEPAGE_PROFILE_BLOCKED_SCRIPT = (
+    "() => String(window.__DOUYIN_HOMEPAGE_PROFILE_BLOCKED_REASON__ || '')"
+)
+# 就绪判定要等到懒加载的作品网格铺完，冷缓存下 20 秒常常不够。
+_HOMEPAGE_PROFILE_READY_TIMEOUT_MS = 45_000
+
+
+class LoginRequiredError(Exception):
+    """Raised when Douyin rejects a request because the session is not logged in.
+
+    Signalled by ``status_code == 2483`` (or a ``status_msg`` asking to log in).
+    Higher layers (CLI) catch this to trigger an interactive re-login + retry.
+    """
+
+    def __init__(self, status_code: int, status_msg: str, path: str):
+        self.status_code = status_code
+        self.status_msg = status_msg
+        self.path = path
+        super().__init__(f"login required (status_code={status_code}) at {path}: {status_msg}")
+
+
+def _is_login_required(data: object) -> bool:
+    if not isinstance(data, dict):
+        return False
+    code = data.get("status_code")
+    msg = str(data.get("status_msg") or "")
+    # Match by message, not by the bare status_code=8: `8` is a generic
+    # Douyin error code, but "用户未登录" is unambiguously "not logged in"
+    # (returned by /profile/self/ and other endpoints on an expired
+    # session). Message-matching avoids misreading an unrelated code-8.
+    return code in _LOGIN_REQUIRED_STATUS_CODES or "请先登录" in msg or "用户未登录" in msg
+
+
+def _summarize_api_response(data: object) -> Dict[str, Any]:
+    """Keep response-shape diagnostics without persisting item payloads."""
+
+    raw = data if isinstance(data, dict) else {}
+    item_key = "-"
+    item_count = 0
+    for key in ("aweme_list", "items", "followings", "mix_list", "music_list", "data"):
+        value = raw.get(key)
+        if isinstance(value, list):
+            item_key = key
+            item_count = len(value)
+            break
+
+    status_msg = " ".join(str(raw.get("status_msg") or "").split())[:200]
+    cursor = raw.get("max_cursor")
+    if cursor is None:
+        cursor = raw.get("cursor")
+    return {
+        "api_status": raw.get("status_code"),
+        "status_msg": status_msg,
+        "item_key": item_key,
+        "item_count": item_count,
+        "has_more": raw.get("has_more"),
+        "cursor": cursor,
+        "login_tip": bool((raw.get("not_login_module") or {}).get("guide_login_tip_exist"))
+        if isinstance(raw.get("not_login_module"), dict)
+        else False,
+        "verify_page": bool(raw.get("verify_ticket")),
+        "top_level_keys": ",".join(sorted(str(key) for key in raw)[:30]),
+    }
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.monotonic() - started) * 1000))
+
+
+def _safe_error_text(exc: Exception) -> str:
+    text = " ".join(str(exc).split())
+    text = re.sub(r"(https?://[^?\s]+)\?\S+", r"\1?[redacted-query]", text)
+    return text[:500]
+
+
+def _log_api_response(
+    path: str,
+    attempt: int,
+    max_retries: int,
+    body: bytes,
+    data: object,
+    started: float,
+) -> None:
+    summary = _summarize_api_response(data)
+    logger.info(
+        "Douyin API response: path=%s attempt=%d/%d http=200 duration_ms=%d bytes=%d "
+        "api_status=%s status_msg=%r item_key=%s item_count=%s has_more=%s cursor=%s "
+        "login_tip=%s verify_page=%s keys=%s",
+        path,
+        attempt + 1,
+        max_retries,
+        _elapsed_ms(started),
+        len(body),
+        summary["api_status"],
+        summary["status_msg"],
+        summary["item_key"],
+        summary["item_count"],
+        summary["has_more"],
+        summary["cursor"],
+        summary["login_tip"],
+        summary["verify_page"],
+        summary["top_level_keys"],
+    )
+
+
 _USER_AGENT_POOL = [
     (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
     ),
     (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
-    (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-    ),
-    (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-    ),
-    (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) "
-        "Gecko/20100101 Firefox/133.0"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
     ),
 ]
 
 
 class DouyinAPIClient:
     BASE_URL = "https://www.douyin.com"
+    LIVE_WEB_BASE_URL = "https://live.douyin.com"
+    LIVE_REFLOW_BASE_URL = "https://webcast.amemv.com"
     _BROWSER_COOKIE_BLOCKLIST = {
         "sessionid",
         "sessionid_ss",
@@ -60,27 +257,34 @@ class DouyinAPIClient:
         "login_time",
     }
 
-    def __init__(self, cookies: Dict[str, str], proxy: Optional[str] = None):
+    def __init__(
+        self,
+        cookies: Dict[str, str],
+        proxy: Optional[str] = None,
+        page_bridge: Optional[Any] = None,
+    ):
         self.cookies = sanitize_cookies(cookies or {})
         self.proxy = str(proxy or "").strip()
+        # 桌面版注入的页面签名通道(core/page_bridge.py,desktop-only)。为 None 时
+        # 所有端点走 aiohttp——CLI 姊妹仓永远是 None。鸭子类型:只要求
+        # ``await fetch(path, params, method=, data=)`` 返回带 http_status/body/text
+        # 的对象,失败异常带 ``page_bridge_code``。
+        self.page_bridge = page_bridge
         self._session: Optional[aiohttp.ClientSession] = None
         self._browser_post_aweme_items: Dict[str, Dict[str, Any]] = {}
         self._browser_post_stats: Dict[str, int] = {}
         selected_ua = random.choice(_USER_AGENT_POOL)
         self.headers = {
             "User-Agent": selected_ua,
-            "Referer": "https://www.douyin.com/",
-            "Accept": "application/json",
+            "Referer": "https://www.douyin.com/?recommend=1",
+            "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Connection": "keep-alive",
         }
         self._signer = XBogus(self.headers["User-Agent"])
         self._ms_token_manager = MsTokenManager(user_agent=self.headers["User-Agent"])
         self._ms_token = (self.cookies.get("msToken") or "").strip()
-        self._abogus_enabled = (
-            ABogus is not None and BrowserFingerprintGenerator is not None
-        )
+        self._abogus_enabled = ABogus is not None and BrowserFingerprintGenerator is not None
 
     async def __aenter__(self) -> "DouyinAPIClient":
         await self._ensure_session()
@@ -131,26 +335,30 @@ class DouyinAPIClient:
             "channel": "channel_pc_web",
             "update_version_code": "170400",
             "pc_client_type": "1",
+            "pc_libra_divert": "Windows",
             "version_code": "290100",
             "version_name": "29.1.0",
             "cookie_enabled": "true",
-            "screen_width": "1920",
-            "screen_height": "1080",
+            "screen_width": "1536",
+            "screen_height": "864",
             "browser_language": "zh-CN",
             "browser_platform": "Win32",
             "browser_name": "Chrome",
-            "browser_version": "130.0.0.0",
+            "browser_version": "139.0.0.0",
             "browser_online": "true",
             "engine_name": "Blink",
-            "engine_version": "130.0.0.0",
+            "engine_version": "139.0.0.0",
             "os_name": "Windows",
             "os_version": "10",
-            "cpu_core_num": "12",
+            "cpu_core_num": "16",
             "device_memory": "8",
             "platform": "PC",
             "downlink": "10",
             "effective_type": "4g",
-            "round_trip_time": "100",
+            "round_trip_time": "200",
+            "support_h265": "1",
+            "support_dash": "1",
+            "uifid": "",
             "msToken": ms_token,
         }
 
@@ -158,22 +366,36 @@ class DouyinAPIClient:
         signed_url, _xbogus, ua = self._signer.build(url)
         return signed_url, ua
 
-    def build_signed_path(self, path: str, params: Dict[str, Any]) -> Tuple[str, str]:
+    def build_signed_path(
+        self,
+        path: str,
+        params: Dict[str, Any],
+        *,
+        base_url: Optional[str] = None,
+        request_data: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, str]:
         query = urlencode(params)
-        base_url = f"{self.BASE_URL}{path}"
-        ab_signed = self._build_abogus_url(base_url, query)
+        endpoint = f"{(base_url or self.BASE_URL).rstrip('/')}{path}"
+        ab_signed = self._build_abogus_url(endpoint, query, request_data=request_data)
         if ab_signed:
             return ab_signed
-        return self.sign_url(f"{base_url}?{query}")
+        return self.sign_url(f"{endpoint}?{query}")
 
-    def _build_abogus_url(self, base_url: str, query: str) -> Optional[Tuple[str, str]]:
+    def _build_abogus_url(
+        self,
+        base_url: str,
+        query: str,
+        *,
+        request_data: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Tuple[str, str]]:
         if not self._abogus_enabled:
             return None
 
         try:
-            browser_fp = BrowserFingerprintGenerator.generate_fingerprint("Edge")
+            browser_fp = BrowserFingerprintGenerator.generate_fingerprint("Chrome")
             signer = ABogus(fp=browser_fp, user_agent=self.headers["User-Agent"])
-            params_with_ab, _ab, ua, _body = signer.generate_abogus(query, "")
+            body = urlencode(request_data or {})
+            params_with_ab, _ab, ua, _body = signer.generate_abogus(query, body)
             return f"{base_url}?{params_with_ab}", ua
         except Exception as exc:
             logger.warning("Failed to generate a_bogus, fallback to X-Bogus: %s", exc)
@@ -185,48 +407,286 @@ class DouyinAPIClient:
         params: Dict[str, Any],
         *,
         suppress_error: bool = False,
-        max_retries: int = 3,
+        max_retries: int = _MAX_ATTEMPTS,
+        base_url: Optional[str] = None,
+        request_headers: Optional[Dict[str, str]] = None,
+        method: str = "GET",
+        data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         await self._ensure_session()
-        delays = [1, 2, 5]
+        method = method.upper()
+        if method not in {"GET", "POST"}:
+            raise ValueError(f"unsupported request method: {method}")
+        delays = _RETRY_DELAYS_SECONDS
         last_exc: Optional[Exception] = None
+        risk_control_hit = False
 
         for attempt in range(max_retries):
-            signed_url, ua = self.build_signed_path(path, params)
+            started = time.monotonic()
+            risk_control_hit = False
+            signing_kwargs: Dict[str, Any] = {}
+            if base_url:
+                signing_kwargs["base_url"] = base_url
+            if method == "POST":
+                signing_kwargs["request_data"] = data
+            signed_url, ua = self.build_signed_path(path, params, **signing_kwargs)
+            signer = "a_bogus" if "a_bogus=" in signed_url else "x_bogus"
+            logger.info(
+                "Douyin API request: path=%s method=%s attempt=%d/%d signer=%s "
+                "proxy_enabled=%s base=%s param_keys=%s",
+                path,
+                method,
+                attempt + 1,
+                max_retries,
+                signer,
+                bool(self.proxy),
+                "custom" if base_url else "default",
+                ",".join(sorted(str(key) for key in params)),
+            )
+            headers = {**self.headers, **(request_headers or {}), "User-Agent": ua}
+            request = self._session.post if method == "POST" else self._session.get
+            request_kwargs: Dict[str, Any] = {
+                "headers": headers,
+                "proxy": self.proxy or None,
+            }
+            if method == "POST":
+                request_kwargs["data"] = data or {}
             try:
-                async with self._session.get(
-                    signed_url,
-                    headers={**self.headers, "User-Agent": ua},
-                    proxy=self.proxy or None,
-                ) as response:
+                async with request(signed_url, **request_kwargs) as response:
                     if response.status == 200:
-                        data = await response.json(content_type=None)
-                        return data if isinstance(data, dict) else {}
-                    if response.status < 500 and response.status != 429:
-                        log_fn = logger.debug if suppress_error else logger.error
+                        body = await response.read()
+                        if not body:
+                            # Empty 200 response is a common anti-bot signal
+                            # from Douyin. Retry with a fresh signature.
+                            retry_status = (
+                                "will retry" if attempt < max_retries - 1 else "no retries remain"
+                            )
+                            logger.warning(
+                                "Empty 200 response for %s (attempt %d/%d, duration_ms=%d), "
+                                "likely anti-bot; %s",
+                                path,
+                                attempt + 1,
+                                max_retries,
+                                _elapsed_ms(started),
+                                retry_status,
+                            )
+                            last_exc = RuntimeError(f"Empty 200 response for {path} (anti-bot)")
+                            if attempt < max_retries - 1:
+                                delay = delays[min(attempt, len(delays) - 1)]
+                                await asyncio.sleep(delay)
+                            continue
+                        try:
+                            data = await response.json(content_type=None)
+                        except Exception:
+                            import json as _json
+
+                            try:
+                                data = _json.loads(body)
+                            except Exception:
+                                logger.warning(
+                                    "Non-JSON 200 response for %s, length=%d duration_ms=%d",
+                                    path,
+                                    len(body),
+                                    _elapsed_ms(started),
+                                )
+                                return {}
+                        result = data if isinstance(data, dict) else {}
+                        _log_api_response(path, attempt, max_retries, body, result, started)
+                        if _is_login_required(result):
+                            raise LoginRequiredError(
+                                int(result.get("status_code") or 0),
+                                str(result.get("status_msg") or ""),
+                                path,
+                            )
+                        return result
+                    risk_control_hit = response.status in _RISK_CONTROL_HTTP_STATUSES
+                    if response.status < 500 and not risk_control_hit:
+                        log_fn = logger.info if suppress_error else logger.error
                         log_fn(
-                            "Request failed: path=%s, status=%s",
+                            "Douyin API HTTP failure: path=%s attempt=%d/%d status=%s "
+                            "duration_ms=%d suppress_error=%s",
                             path,
+                            attempt + 1,
+                            max_retries,
                             response.status,
+                            _elapsed_ms(started),
+                            suppress_error,
                         )
                         return {}
-                    last_exc = RuntimeError(
-                        f"HTTP {response.status} for {path}"
+                    last_exc = RuntimeError(f"HTTP {response.status} for {path}")
+                    logger.warning(
+                        "Douyin API retryable HTTP failure: path=%s attempt=%d/%d status=%s "
+                        "duration_ms=%d risk_control=%s",
+                        path,
+                        attempt + 1,
+                        max_retries,
+                        response.status,
+                        _elapsed_ms(started),
+                        risk_control_hit,
                     )
+            except LoginRequiredError:
+                raise
             except Exception as exc:
                 last_exc = exc
+                logger.warning(
+                    "Douyin API attempt failed: path=%s attempt=%d/%d duration_ms=%d "
+                    "error_type=%s error=%s",
+                    path,
+                    attempt + 1,
+                    max_retries,
+                    _elapsed_ms(started),
+                    type(exc).__name__,
+                    _safe_error_text(exc),
+                )
 
             if attempt < max_retries - 1:
                 delay = delays[min(attempt, len(delays) - 1)]
-                logger.debug(
-                    "Request retry %d/%d for %s in %ds",
-                    attempt + 1, max_retries, path, delay,
+                logger.info(
+                    "Douyin API retry scheduled: path=%s completed_attempt=%d/%d "
+                    "delay_s=%d risk_control=%s",
+                    path,
+                    attempt + 1,
+                    max_retries,
+                    delay,
+                    risk_control_hit,
                 )
                 await asyncio.sleep(delay)
 
-        log_fn = logger.debug if suppress_error else logger.error
-        log_fn("Request failed after %d attempts: path=%s, error=%s", max_retries, path, last_exc)
+        log_fn = logger.info if suppress_error else logger.error
+        log_fn(
+            "Douyin API request exhausted: path=%s attempts=%d suppress_error=%s "
+            "error_type=%s error=%s",
+            path,
+            max_retries,
+            suppress_error,
+            type(last_exc).__name__ if last_exc else "-",
+            _safe_error_text(last_exc) if last_exc else "-",
+        )
         return {}
+
+    def _payload_from_bridge_result(self, result: Any, path: str, started: float) -> Dict[str, Any]:
+        """把 bridge 200 响应折算成与 ``_request_json`` 一致的 payload。
+
+        body 非 dict(如反爬 HTML challenge 页)按 Non-JSON 200 记警告并降级为
+        ``{}``,与 aiohttp 路径的同名日志对齐,避免把它悄悄记成成功响应。
+        """
+        text = str(getattr(result, "text", "") or "")
+        body = getattr(result, "body", None)
+        if not isinstance(body, dict):
+            logger.warning(
+                "Non-JSON 200 response via page bridge: path=%s text_len=%d",
+                path,
+                len(text),
+            )
+        payload = body if isinstance(body, dict) else {}
+        _log_api_response(path, 0, 1, text.encode("utf-8", "replace"), payload, started)
+        if _is_login_required(payload):
+            raise LoginRequiredError(
+                int(payload.get("status_code") or 0),
+                str(payload.get("status_msg") or ""),
+                path,
+            )
+        return payload
+
+    async def _request_json_gated(
+        self,
+        path: str,
+        params: Dict[str, Any],
+        *,
+        method: str = "GET",
+        data: Optional[Dict[str, Any]] = None,
+        request_headers: Optional[Dict[str, str]] = None,
+        suppress_error: bool = False,
+    ) -> Dict[str, Any]:
+        """被 ArgusSecurityPlugin 门禁的端点入口。
+
+        有 ``page_bridge`` 时交给 Electron 隐藏登录窗口发(页面 SDK 补
+        uifid / timestamp / x-secsdk-web-signature),否则与 ``_request_json``
+        完全一致。经 bridge 的 403/429 不重试:Argus 拒绝是确定性的,重试只会
+        加速触发验证码。5xx 与反爬空 200 是瞬时的,与 aiohttp 路径同档重试。
+        """
+        if self.page_bridge is None:
+            return await self._request_json(
+                path,
+                params,
+                method=method,
+                data=data,
+                request_headers=request_headers,
+                suppress_error=suppress_error,
+            )
+        started = time.monotonic()
+        logger.info(
+            "Douyin API request via page bridge: path=%s method=%s param_keys=%s",
+            path,
+            method.upper(),
+            ",".join(sorted(str(key) for key in params)),
+        )
+        for attempt in range(_MAX_ATTEMPTS):
+            result = await self._fetch_via_page_bridge(path, params, method=method, data=data)
+            status = int(getattr(result, "http_status", 0) or 0)
+            if not self._bridge_answer_is_transient(result, status):
+                break
+            logger.warning(
+                "Douyin API transient failure via page bridge: path=%s attempt=%d/%d status=%s",
+                path,
+                attempt + 1,
+                _MAX_ATTEMPTS,
+                status,
+            )
+            if attempt == _MAX_ATTEMPTS - 1:
+                break
+            await asyncio.sleep(_RETRY_DELAYS_SECONDS[min(attempt, len(_RETRY_DELAYS_SECONDS) - 1)])
+        if status == 200:
+            return self._payload_from_bridge_result(result, path, started)
+        log_fn = logger.info if suppress_error else logger.error
+        log_fn(
+            "Douyin API HTTP failure via page bridge: path=%s status=%s duration_ms=%d body=%r",
+            path,
+            status,
+            _elapsed_ms(started),
+            str(getattr(result, "text", "") or "")[:80],
+        )
+        return {}
+
+    async def _fetch_via_page_bridge(
+        self,
+        path: str,
+        params: Dict[str, Any],
+        *,
+        method: str,
+        data: Optional[Dict[str, Any]],
+    ) -> Any:
+        try:
+            return await self.page_bridge.fetch(path, params, method=method.upper(), data=data)
+        except Exception as exc:
+            if getattr(exc, "page_bridge_code", None) == "NOT_LOGGED_IN":
+                raise LoginRequiredError(0, "page bridge: not logged in", path) from exc
+            raise
+
+    @staticmethod
+    def _bridge_answer_is_transient(result: Any, status: int) -> bool:
+        """只有服务端 5xx 与「空 200」值得重试。
+
+        403/429 是 Argus 的确定性拒绝;其余 4xx 同样不会自愈;非空但非 JSON
+        的 200 是验证码/挑战页,重试只是白烧这个窗口。
+        """
+        if status >= _SERVER_ERROR_MIN_STATUS:
+            return True
+        if status != 200 or isinstance(getattr(result, "body", None), dict):
+            return False
+        return not str(getattr(result, "text", "") or "").strip()
+
+    @classmethod
+    def _unavailable_paged_response(cls, *, item_keys: List[str]) -> Dict[str, Any]:
+        """「这个端点对当前参数不适用」而不是「请求失败」。
+
+        故意给一个非空 ``raw``：调用方靠空 ``raw`` 判定请求失败
+        (见 ``BaseUserModeStrategy._page_request_failed``)，这里直接返回
+        空列表却带着空 ``raw`` 会被误报成限流。
+        """
+        return cls._normalize_paged_response(
+            {"status_code": 0, "has_more": 0}, item_keys=item_keys, source="api"
+        )
 
     @staticmethod
     def _normalize_paged_response(
@@ -240,11 +700,19 @@ class DouyinAPIClient:
         keys = ["items", *keys, "aweme_list", "mix_list", "music_list"]
 
         items: List[Dict[str, Any]] = []
+        # 显式的 ``"aweme_list": null`` 与真 ``[]`` 归一化后都是空 items，但只有
+        # 后者可信：docs/spec/gotchas.md 记着 0.11.2 把 null 当空收藏夹，清空了
+        # 用户的自定义收藏夹。这里留下痕迹，让分页走查能判成失败而不是到底。
+        items_missing = False
         for key in keys:
-            value = raw.get(key)
+            if key not in raw:
+                continue
+            value = raw[key]
             if isinstance(value, list):
                 items = value
+                items_missing = False
                 break
+            items_missing = True
 
         has_more_value = raw.get("has_more", False)
         try:
@@ -277,6 +745,7 @@ class DouyinAPIClient:
 
         normalized = {
             "items": items,
+            "items_missing": items_missing,
             "aweme_list": items,  # 兼容旧调用方
             "has_more": has_more,
             "max_cursor": max_cursor,
@@ -320,7 +789,7 @@ class DouyinAPIClient:
                 }
             )
 
-            data = await self._request_json(
+            data = await self._request_json_gated(
                 "/aweme/v1/web/aweme/detail/",
                 params,
                 suppress_error=(suppress_error or aid != self._DETAIL_AID_CANDIDATES[-1]),
@@ -350,7 +819,7 @@ class DouyinAPIClient:
         return None
 
     async def get_user_post(
-        self, sec_uid: str, max_cursor: int = 0, count: int = 20
+        self, sec_uid: str, max_cursor: int = 0, count: int = 18
     ) -> Dict[str, Any]:
         params = await self._build_user_page_params(sec_uid, max_cursor, count)
         params.update(
@@ -363,33 +832,74 @@ class DouyinAPIClient:
                 "publish_video_strategy_type": "2",
             }
         )
-        raw = await self._request_json("/aweme/v1/web/aweme/post/", params)
+        raw = await self._request_json_gated("/aweme/v1/web/aweme/post/", params)
         return self._normalize_paged_response(raw, item_keys=["aweme_list"])
 
     async def get_user_like(
         self, sec_uid: str, max_cursor: int = 0, count: int = 20
     ) -> Dict[str, Any]:
         params = await self._build_user_page_params(sec_uid, max_cursor, count)
-        raw = await self._request_json("/aweme/v1/web/aweme/favorite/", params)
+        raw = await self._request_json_gated("/aweme/v1/web/aweme/favorite/", params)
         return self._normalize_paged_response(raw, item_keys=["aweme_list"])
 
     async def get_user_mix(
         self, sec_uid: str, max_cursor: int = 0, count: int = 20
     ) -> Dict[str, Any]:
         params = await self._build_user_page_params(sec_uid, max_cursor, count)
-        raw = await self._request_json("/aweme/v1/web/mix/list/", params)
-        return self._normalize_paged_response(raw, item_keys=["mix_list"])
+        raw = await self._request_json_gated("/aweme/v1/web/mix/list/", params)
+        return self._normalize_paged_response(raw, item_keys=["mix_infos", "mix_list"])
 
     async def get_user_music(
         self, sec_uid: str, max_cursor: int = 0, count: int = 20
     ) -> Dict[str, Any]:
         params = await self._build_user_page_params(sec_uid, max_cursor, count)
-        raw = await self._request_json("/aweme/v1/web/music/list/", params)
+        raw = await self._request_json_gated("/aweme/v1/web/music/list/", params)
         return self._normalize_paged_response(raw, item_keys=["music_list"])
 
-    async def _build_collect_page_params(
-        self, max_cursor: int, count: int
+    async def get_following_page(
+        self,
+        sec_uid: str,
+        *,
+        max_time: int = 0,
+        count: int = 20,
     ) -> Dict[str, Any]:
+        """Fetch a single page of the logged-in account's following list.
+
+        Desktop-only: used by ``core/following.FollowingService`` to sync the
+        "My Following" tab. Douyin's web endpoint paginates via time-based
+        cursoring: the response contains ``min_time`` which must be passed as
+        ``max_time`` in the next request to get the next page. The ``count``
+        parameter is capped at 20 by the server regardless of what we send.
+
+        Returns a normalized dict with ``items``, ``has_more``, ``min_time``,
+        ``max_time``, ``status_code``, and ``raw`` (the full response).
+        """
+        params = await self._default_query()
+        params.update(
+            {
+                "user_id": sec_uid,
+                "sec_user_id": sec_uid,
+                "offset": 0,
+                "count": count,
+                "source_type": "1",
+                "gps_access": "0",
+                "address_book_access": "0",
+                "min_change": "0",
+            }
+        )
+        if max_time > 0:
+            params["max_time"] = max_time
+        raw = await self._request_json("/aweme/v1/web/user/following/list/", params)
+        normalized = self._normalize_paged_response(
+            raw,
+            item_keys=["followings", "follow_list", "user_list"],
+        )
+        # Expose the time-based pagination fields for the sync loop.
+        normalized["min_time"] = int(raw.get("min_time") or 0) if isinstance(raw, dict) else 0
+        normalized["max_time_resp"] = int(raw.get("max_time") or 0) if isinstance(raw, dict) else 0
+        return normalized
+
+    async def _build_collect_page_params(self, max_cursor: int, count: int) -> Dict[str, Any]:
         params = await self._default_query()
         params.update(
             {
@@ -401,17 +911,49 @@ class DouyinAPIClient:
         )
         return params
 
+    async def get_user_collection(
+        self, sec_uid: str = "self", max_cursor: int = 0, count: int = 20
+    ) -> Dict[str, Any]:
+        """Fetch one page of the logged-in account's collected awemes.
+
+        This is the account-level/default collection feed. It is distinct
+        from ``get_user_collects`` (custom folder metadata) and from
+        ``get_user_like`` (liked awemes). Douyin currently exposes it as a
+        form-encoded POST whose cursor lives in the request body.
+        """
+        if sec_uid and sec_uid != "self":
+            logger.warning("Account collection currently requires self sec_uid, got=%s", sec_uid)
+            return self._unavailable_paged_response(item_keys=["aweme_list"])
+
+        params = await self._default_query()
+        params.update(
+            {
+                "publish_video_strategy_type": "2",
+                "version_code": "170400",
+                "version_name": "17.4.0",
+            }
+        )
+        raw = await self._request_json_gated(
+            "/aweme/v1/web/aweme/listcollection/",
+            params,
+            method="POST",
+            data={"count": count, "cursor": max_cursor},
+            request_headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": "https://www.douyin.com/user/self?showTab=favorite_collection",
+            },
+        )
+        return self._normalize_paged_response(raw, item_keys=["aweme_list"])
+
     async def get_user_collects(
         self, sec_uid: str, max_cursor: int = 0, count: int = 10
     ) -> Dict[str, Any]:
         if sec_uid and sec_uid != "self":
             logger.warning("Collect folders currently require self sec_uid, got=%s", sec_uid)
-            return self._normalize_paged_response(
-                {}, item_keys=["collects_list"], source="api"
-            )
+            return self._unavailable_paged_response(item_keys=["collects_list"])
 
         params = await self._build_collect_page_params(max_cursor, count)
-        raw = await self._request_json("/aweme/v1/web/collects/list/", params)
+        raw = await self._request_json_gated("/aweme/v1/web/collects/list/", params)
         return self._normalize_paged_response(raw, item_keys=["collects_list"])
 
     async def get_collect_aweme(
@@ -419,7 +961,7 @@ class DouyinAPIClient:
     ) -> Dict[str, Any]:
         params = await self._build_collect_page_params(max_cursor, count)
         params.update({"collects_id": collects_id})
-        raw = await self._request_json("/aweme/v1/web/collects/video/list/", params)
+        raw = await self._request_json_gated("/aweme/v1/web/collects/video/list/", params)
         return self._normalize_paged_response(raw, item_keys=["aweme_list"])
 
     async def get_user_collect_mix(
@@ -427,12 +969,10 @@ class DouyinAPIClient:
     ) -> Dict[str, Any]:
         if sec_uid and sec_uid != "self":
             logger.warning("Collect mix currently require self sec_uid, got=%s", sec_uid)
-            return self._normalize_paged_response(
-                {}, item_keys=["mix_infos"], source="api"
-            )
+            return self._unavailable_paged_response(item_keys=["mix_infos"])
 
         params = await self._build_collect_page_params(max_cursor, count)
-        raw = await self._request_json("/aweme/v1/web/mix/listcollection/", params)
+        raw = await self._request_json_gated("/aweme/v1/web/mix/listcollection/", params)
         return self._normalize_paged_response(raw, item_keys=["mix_infos"])
 
     async def get_user_info(self, sec_uid: str) -> Optional[Dict[str, Any]]:
@@ -444,26 +984,46 @@ class DouyinAPIClient:
             return data.get("user")
         return None
 
+    async def get_self_info(self) -> Optional[Dict[str, Any]]:
+        """Fetch the logged-in user's own profile.
+
+        Uses the ``/aweme/v1/web/user/profile/self/`` endpoint which
+        identifies the user from the session cookies — no ``sec_uid``
+        parameter needed. Returns the ``user`` dict (containing
+        ``sec_uid``, ``uid``, ``nickname``, etc.) or ``None`` on failure.
+
+        Desktop-only: used by the Following sync to resolve the
+        logged-in user's ``sec_uid`` before calling
+        ``get_following_page``.
+        """
+        params = await self._default_query()
+        data = await self._request_json("/aweme/v1/web/user/profile/self/", params)
+        if data:
+            return data.get("user")
+        return None
+
     async def get_mix_detail(self, mix_id: str) -> Optional[Dict[str, Any]]:
         params = await self._default_query()
         params.update({"mix_id": mix_id})
-        data = await self._request_json("/aweme/v1/web/mix/detail/", params)
+        data = await self._request_json_gated("/aweme/v1/web/mix/detail/", params)
         if not data:
             return None
         return data.get("mix_info") or data.get("mix_detail") or data
 
-    async def get_mix_aweme(
-        self, mix_id: str, cursor: int = 0, count: int = 20
-    ) -> Dict[str, Any]:
+    async def get_mix_aweme(self, mix_id: str, cursor: int = 0, count: int = 20) -> Dict[str, Any]:
+        # 2026-09-10 起 ``mix/aweme/`` 也被 ArgusSecurityPlugin 门禁(aiohttp 恒
+        # 403 ``Uifid Not Found`` → 补 uifid 后 ``Signature Not Found``),与
+        # favorite / collects 同档。2026-09-14 起名单扩到 aweme/detail、
+        # aweme/post、mix/detail、mix/list、music/detail、music/aweme、music/list。
         params = await self._default_query()
         params.update({"mix_id": mix_id, "cursor": cursor, "count": count})
-        raw = await self._request_json("/aweme/v1/web/mix/aweme/", params)
+        raw = await self._request_json_gated("/aweme/v1/web/mix/aweme/", params)
         return self._normalize_paged_response(raw, item_keys=["aweme_list"])
 
     async def get_music_detail(self, music_id: str) -> Optional[Dict[str, Any]]:
         params = await self._default_query()
         params.update({"music_id": music_id})
-        data = await self._request_json("/aweme/v1/web/music/detail/", params)
+        data = await self._request_json_gated("/aweme/v1/web/music/detail/", params)
         if not data:
             return None
         return data.get("music_info") or data.get("music_detail") or data
@@ -473,61 +1033,220 @@ class DouyinAPIClient:
     ) -> Dict[str, Any]:
         params = await self._default_query()
         params.update({"music_id": music_id, "cursor": cursor, "count": count})
-        raw = await self._request_json("/aweme/v1/web/music/aweme/", params)
+        raw = await self._request_json_gated("/aweme/v1/web/music/aweme/", params)
         return self._normalize_paged_response(raw, item_keys=["aweme_list"])
 
-    async def get_live_room_info(
-        self, room_id: str, *, sec_user_id: str = ""
-    ) -> Optional[Dict[str, Any]]:
-        """通过房间号（web_rid）拉取直播间信息。
-
-        返回包含 room_info + stream_url 的 dict；若房间不在直播中或接口失败返回 None。
-        """
+    async def _build_live_room_request(
+        self, room_id: str, sec_user_id: str, room_id_kind: str
+    ) -> Tuple[str, Dict[str, Any], str]:
         params = await self._default_query()
+        if room_id_kind == "room_id":
+            params.update(
+                {
+                    "room_id": room_id,
+                    "sec_user_id": sec_user_id,
+                    "type_id": "0",
+                    "live_id": "1",
+                    "app_id": "1128",
+                    "version_code": "99.99.99",
+                }
+            )
+            return "/webcast/room/reflow/info/", params, self.LIVE_REFLOW_BASE_URL
+
         params.update(
             {
                 "web_rid": room_id,
-                "room_id_str": room_id,
+                "app_name": "douyin_web",
+                "live_id": "1",
+                "device_platform": "web",
+                "language": "zh-CN",
                 "enter_source": "",
                 "is_need_double_stream": "false",
                 "cookie_enabled": "true",
             }
         )
-        if sec_user_id:
-            params["sec_user_id"] = sec_user_id
+        return "/webcast/room/web/enter/", params, self.LIVE_WEB_BASE_URL
 
-        raw = await self._request_json(
-            "/webcast/room/web/enter/",
-            params,
-            suppress_error=True,
-        )
-        if not raw:
+    @staticmethod
+    def _normalize_live_room_response(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+        if not isinstance(data, dict):
             return None
 
-        data_section = raw.get("data") if isinstance(raw.get("data"), dict) else raw
-        if not isinstance(data_section, dict):
-            return None
-
-        room_list = data_section.get("data")
-        room = None
-        if isinstance(room_list, list) and room_list:
-            first = room_list[0]
-            if isinstance(first, dict):
-                room = first
-        elif isinstance(data_section.get("room"), dict):
-            room = data_section.get("room")
-        elif isinstance(raw.get("room"), dict):
+        room = data.get("room") if isinstance(data.get("room"), dict) else None
+        room_list = data.get("data")
+        if room is None and isinstance(room_list, list) and room_list:
+            room = room_list[0] if isinstance(room_list[0], dict) else None
+        if room is None and isinstance(raw.get("room"), dict):
             room = raw.get("room")
-
         if not isinstance(room, dict):
             return None
 
-        user = data_section.get("user") if isinstance(data_section, dict) else None
-        return {
-            "room": room,
-            "user": user if isinstance(user, dict) else {},
-            "raw": raw,
-        }
+        user = data.get("user") if isinstance(data.get("user"), dict) else room.get("owner")
+        return {"room": room, "user": user if isinstance(user, dict) else {}, "raw": raw}
+
+    @staticmethod
+    def _find_stream_room(value: Any) -> Optional[Dict[str, Any]]:
+        pending = [value]
+        while pending:
+            current = pending.pop()
+            if isinstance(current, dict):
+                if isinstance(current.get("stream_url"), dict):
+                    return current
+                pending.extend(current.values())
+            elif isinstance(current, list):
+                pending.extend(current)
+        return None
+
+    @staticmethod
+    def _extract_live_room_from_html(html: str) -> Optional[Dict[str, Any]]:
+        pattern = r"<script[^>]*>\s*(self\.__pace_f\.push\(.*?\))\s*</script>"
+        for call in re.findall(pattern, html, flags=re.DOTALL):
+            try:
+                args = json.loads(call[len("self.__pace_f.push(") : -1])
+                flight = args[1] if isinstance(args, list) and len(args) > 1 else None
+                if not isinstance(flight, str) or not flight.startswith("c:"):
+                    continue
+                room = DouyinAPIClient._find_stream_room(json.loads(flight[2:]))
+            except (IndexError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if room:
+                user = room.get("owner") if isinstance(room.get("owner"), dict) else {}
+                return {"room": room, "user": user, "raw": {"source": "live_page_ssr"}}
+        return None
+
+    async def _fetch_live_room_from_page(self, web_rid: str) -> Optional[Dict[str, Any]]:
+        await self._ensure_session()
+        url = f"{self.LIVE_WEB_BASE_URL}/{web_rid}"
+        headers = {**self.headers, "Referer": "https://live.douyin.com/"}
+        try:
+            async with self._session.get(
+                url, headers=headers, proxy=self.proxy or None
+            ) as response:
+                if response.status != 200:
+                    logger.error(
+                        "Live page request failed: web_rid=%s, status=%s", web_rid, response.status
+                    )
+                    return None
+                return self._extract_live_room_from_html(await response.text())
+        except Exception as exc:
+            logger.error("Live page fallback failed: web_rid=%s, error=%s", web_rid, exc)
+            return None
+
+    async def get_live_room_info(
+        self,
+        room_id: str,
+        *,
+        sec_user_id: str = "",
+        room_id_kind: str = "web_rid",
+    ) -> Optional[Dict[str, Any]]:
+        """按网页直播号或内部 room ID 拉取统一的直播间信息。"""
+        path, params, base_url = await self._build_live_room_request(
+            room_id, sec_user_id, room_id_kind
+        )
+
+        raw = await self._request_json(
+            path,
+            params,
+            suppress_error=room_id_kind != "room_id",
+            max_retries=1 if room_id_kind != "room_id" else 3,
+            base_url=base_url,
+            request_headers={
+                "Referer": "https://live.douyin.com/",
+                "Origin": "https://live.douyin.com",
+            },
+        )
+        info = self._normalize_live_room_response(raw) if raw else None
+        if info or room_id_kind == "room_id":
+            return info
+        logger.info("Live API unavailable for web_rid=%s; trying page SSR", room_id)
+        return await self._fetch_live_room_from_page(room_id)
+
+    async def get_live_replay_episode(self, episode_id: str) -> Optional[Dict[str, Any]]:
+        """获取直播回放入口信息，包含回放对应的 room_id。"""
+        params = await self._default_query()
+        params.update({"channel": "", "episode_id": episode_id})
+        raw = await self._request_json(
+            "/aweme/v1/web/show/episode/enter/",
+            params,
+            suppress_error=True,
+        )
+        data = raw.get("data") if isinstance(raw, dict) else None
+        if isinstance(data, dict):
+            for key in ("episode", "episode_info", "show_episode"):
+                episode = data.get(key)
+                if isinstance(episode, dict):
+                    return episode
+        episode = raw.get("episode") if isinstance(raw, dict) else None
+        return episode if isinstance(episode, dict) else None
+
+    async def get_live_replay_info(
+        self, episode_id: str, room_id: str, replay_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """获取直播回放条目，包含可播放的 video/audio URL 列表。"""
+        params = await self._default_query()
+        params.update({"channel": "", "episode_id": episode_id, "room_id": room_id})
+        if replay_id:
+            params["replay_id"] = replay_id
+        raw = await self._request_json(
+            "/aweme/v1/web/show/episode/replay_list/",
+            params,
+            suppress_error=True,
+        )
+        data = raw.get("data") if isinstance(raw, dict) else None
+        candidates = self._live_replay_candidates(data)
+        if not candidates:
+            return None
+
+        for item in candidates:
+            if self._live_replay_matches(item, episode_id, replay_id):
+                return item
+
+        if replay_id:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    @staticmethod
+    def _live_replay_candidates(data: Any) -> List[Dict[str, Any]]:
+        candidates: List[Dict[str, Any]] = []
+
+        def add_item(item: Any) -> None:
+            if isinstance(item, dict):
+                candidates.append(item)
+
+        def add_list(items: Any) -> None:
+            if isinstance(items, list):
+                for item in items:
+                    add_item(item)
+
+        if not isinstance(data, dict):
+            return candidates
+        for key in ("replay", "replay_info", "current_replay"):
+            add_item(data.get(key))
+        for key in ("info_list", "replay_list", "replays"):
+            add_list(data.get(key))
+        groups = data.get("all_replay")
+        if isinstance(groups, list):
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                for key in ("info_list", "replay_list", "replays"):
+                    add_list(group.get(key))
+        if "video_info" in data:
+            add_item(data)
+        return candidates
+
+    @staticmethod
+    def _live_replay_matches(
+        item: Dict[str, Any], episode_id: str, replay_id: Optional[str] = None
+    ) -> bool:
+        replay_keys = ("replay_id", "id", "replay_id_str")
+        episode_keys = ("episode_id_str", "episode_id")
+        if replay_id:
+            return any(str(item.get(key) or "") == str(replay_id) for key in replay_keys)
+        return any(str(item.get(key) or "") == str(episode_id) for key in episode_keys)
 
     async def get_hot_search_board(self) -> Dict[str, Any]:
         """获取抖音热搜榜。返回归一化 dict，items 为热搜词条列表。"""
@@ -676,9 +1395,7 @@ class DouyinAPIClient:
                     )
                     comment["_replies"] = reply_page.get("items") or []
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug(
-                        "Fetch reply for comment %s failed: %s", comment_id, exc
-                    )
+                    logger.debug("Fetch reply for comment %s failed: %s", comment_id, exc)
         return normalized
 
     async def get_aweme_comment_replies(
@@ -724,8 +1441,8 @@ class DouyinAPIClient:
                     logger.warning(
                         "Short URL resolved with HTTP %s (treated as failure): %s -> %s",
                         response.status,
-                        short_url,
-                        final_url,
+                        safe_log_url(short_url),
+                        safe_log_url(final_url),
                     )
                     return None
                 return final_url
@@ -733,12 +1450,158 @@ class DouyinAPIClient:
             logger.error(
                 "Timeout resolving short URL after %.1fs: %s",
                 timeout_seconds,
-                short_url,
+                safe_log_url(short_url),
             )
             return None
         except Exception as e:
-            logger.error("Failed to resolve short URL: %s, error: %s", short_url, e)
+            logger.error("Failed to resolve short URL: %s, error: %s", safe_log_url(short_url), e)
             return None
+
+    async def save_user_homepage_screenshot(
+        self,
+        sec_uid: str,
+        save_path: Path,
+        *,
+        profile: Optional[Dict[str, Any]] = None,
+        viewport_width: int = 1600,
+        viewport_height: int = 900,
+        timeout_seconds: int = 30,
+    ) -> bool:
+        """Save one creator-homepage viewport without affecting downloads."""
+        if os.environ.get(_HOMEPAGE_SCREENSHOT_BRIDGE_ENV) == "electron":
+            return self._emit_homepage_screenshot_request(sec_uid, save_path, profile)
+
+        try:
+            from playwright.async_api import async_playwright
+        except Exception as exc:
+            logger.warning("Playwright not available, homepage screenshot skipped: %s", exc)
+            return False
+
+        target = Path(save_path)
+        tmp_path = target.with_name(f".{target.name}.tmp")
+        target_url = f"{self.BASE_URL}/user/{sec_uid}"
+        timeout_ms = max(5, int(timeout_seconds)) * 1000
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            async with async_playwright() as playwright:
+                launch_options: Dict[str, Any] = {
+                    "headless": True,
+                    "args": [
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                    ],
+                }
+                proxy = str(self.proxy or "").strip()
+                if proxy:
+                    if proxy.startswith("socks5h://"):
+                        proxy = "socks5://" + proxy[len("socks5h://") :]
+                    launch_options["proxy"] = {"server": proxy}
+
+                browser = await playwright.chromium.launch(**launch_options)
+                try:
+                    context = await browser.new_context(
+                        user_agent=self.headers.get("User-Agent", ""),
+                        locale="zh-CN",
+                        viewport={"width": viewport_width, "height": viewport_height},
+                    )
+                    try:
+                        cookies = self._browser_cookie_payload()
+                        if cookies:
+                            await context.add_cookies(cookies)
+                        page = await context.new_page()
+                        await page.goto(
+                            target_url,
+                            wait_until="domcontentloaded",
+                            timeout=timeout_ms,
+                        )
+                        title = await page.title()
+                        if "验证码" in title:
+                            logger.warning(
+                                "Homepage screenshot skipped because verification is required"
+                            )
+                            return False
+                        profile_expectation: Dict[str, str] = {}
+                        if isinstance(profile, dict):
+                            nickname = profile.get("nickname")
+                            if isinstance(nickname, str) and nickname.strip():
+                                profile_expectation["nickname"] = nickname.strip()[:200]
+                        try:
+                            await page.wait_for_function(
+                                _HOMEPAGE_PROFILE_READY_SCRIPT,
+                                arg=profile_expectation,
+                                polling=250,
+                                timeout=_HOMEPAGE_PROFILE_READY_TIMEOUT_MS,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Homepage profile data did not become ready before capture: %s",
+                                _safe_error_text(exc),
+                            )
+                        try:
+                            blocked_reason = await page.evaluate(_HOMEPAGE_PROFILE_BLOCKED_SCRIPT)
+                        except Exception:
+                            blocked_reason = ""
+                        if blocked_reason:
+                            logger.warning(
+                                "Homepage screenshot skipped because the page is blocked: %s",
+                                blocked_reason,
+                            )
+                            return False
+                        await page.screenshot(path=str(tmp_path), type="png", full_page=False)
+                        await asyncio.to_thread(os.replace, tmp_path, target)
+                    finally:
+                        await context.close()
+                finally:
+                    await browser.close()
+        except Exception as exc:
+            logger.warning(
+                "Failed to save homepage screenshot for %s: %s",
+                sec_uid,
+                _safe_error_text(exc),
+            )
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+
+        logger.info("Homepage screenshot saved: %s", target)
+        return True
+
+    @staticmethod
+    def _emit_homepage_screenshot_request(
+        sec_uid: str,
+        save_path: Path,
+        profile: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        try:
+            safe_profile: Dict[str, Any] = {}
+            if isinstance(profile, dict):
+                nickname = profile.get("nickname")
+                if isinstance(nickname, str) and nickname.strip():
+                    safe_profile["nickname"] = nickname.strip()[:200]
+                for key in ("follower_count", "following_count", "total_favorited"):
+                    count = profile.get(key)
+                    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                        safe_profile[key] = count
+
+            request = {"version": 1, "sec_uid": str(sec_uid), "save_path": str(save_path)}
+            if safe_profile:
+                request["profile"] = safe_profile
+            payload = json.dumps(
+                request,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+            sys.stdout.write(f"{_HOMEPAGE_SCREENSHOT_MESSAGE_PREFIX}{encoded}\n")
+            sys.stdout.flush()
+            return True
+        except Exception as exc:
+            logger.warning("Failed to request Electron homepage screenshot: %s", exc)
+            return False
 
     async def collect_user_post_ids_via_browser(
         self,
@@ -750,12 +1613,11 @@ class DouyinAPIClient:
         idle_rounds: int = 8,
         wait_timeout_seconds: int = 600,
     ) -> List[str]:
+        browser_started = time.monotonic()
         try:
             from playwright.async_api import async_playwright
         except Exception as exc:
-            logger.warning(
-                "Playwright not available, browser fallback disabled: %s", exc
-            )
+            logger.warning("Playwright not available, browser fallback disabled: %s", exc)
             return []
 
         target_url = f"{self.BASE_URL}/user/{sec_uid}"
@@ -776,11 +1638,23 @@ class DouyinAPIClient:
                     ids.append(aweme_id)
 
         logger.warning(
-            "API翻页受限，启动浏览器兜底采集（可在弹出页面手动通过验证码/登录）：%s",
-            target_url,
+            "API翻页受限，启动浏览器兜底采集：target=%s expected_count=%s "
+            "headless=%s max_scrolls=%s idle_rounds=%s timeout_s=%s",
+            safe_log_url(target_url),
+            expected_count,
+            headless,
+            max_scrolls,
+            idle_rounds,
+            wait_timeout_seconds,
         )
 
         async with async_playwright() as playwright:
+            executable_path = str(getattr(playwright.chromium, "executable_path", "") or "")
+            logger.info(
+                "Browser fallback runtime: executable=%s exists=%s",
+                executable_path or "-",
+                bool(executable_path and os.path.exists(executable_path)),
+            )
             browser = await playwright.chromium.launch(
                 headless=headless,
                 args=[
@@ -795,6 +1669,11 @@ class DouyinAPIClient:
                 viewport={"width": 1600, "height": 900},
             )
             cookies = self._browser_cookie_payload()
+            logger.info(
+                "Browser fallback context ready: cookie_count=%s cookie_names=%s",
+                len(cookies),
+                ",".join(sorted(str(cookie.get("name")) for cookie in cookies)) or "-",
+            )
             if cookies:
                 await context.add_cookies(cookies)
 
@@ -831,17 +1710,13 @@ class DouyinAPIClient:
                             post_api_ids.append(aweme_id)
 
             def _on_response(response):
-                pending_response_tasks.append(
-                    asyncio.create_task(_handle_response(response))
-                )
+                pending_response_tasks.append(asyncio.create_task(_handle_response(response)))
 
             page.on("response", _on_response)
 
             try:
                 try:
-                    await page.goto(
-                        target_url, wait_until="domcontentloaded", timeout=timeout_ms
-                    )
+                    await page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 except Exception as exc:
                     logger.warning(
                         "Browser goto timeout or error, continue with current page state: %s",
@@ -853,6 +1728,11 @@ class DouyinAPIClient:
                     title = await page.title()
                 except Exception:
                     pass
+                logger.info(
+                    "Browser fallback page state: title=%r url=%s",
+                    title[:200],
+                    safe_log_url(getattr(page, "url", target_url)),
+                )
                 if "验证码" in title:
                     if headless:
                         logger.warning(
@@ -860,9 +1740,7 @@ class DouyinAPIClient:
                             "请将 browser_fallback.headless 设为 false。"
                         )
                         return []
-                    logger.warning(
-                        "检测到验证码页面，请在浏览器中完成验证，程序会自动继续采集。"
-                    )
+                    logger.warning("检测到验证码页面，请在浏览器中完成验证，程序会自动继续采集。")
                     await self._wait_for_manual_verification(
                         page, wait_timeout_seconds=wait_timeout_seconds
                     )
@@ -874,9 +1752,7 @@ class DouyinAPIClient:
                                 timeout=timeout_ms,
                             )
                         except Exception as exc:
-                            logger.warning(
-                                "Reload user page after verification failed: %s", exc
-                            )
+                            logger.warning("Reload user page after verification failed: %s", exc)
 
                 try:
                     warmup_seconds = min(20, max(3, int(wait_timeout_seconds)))
@@ -918,9 +1794,7 @@ class DouyinAPIClient:
                     )
             finally:
                 if pending_response_tasks:
-                    await asyncio.gather(
-                        *pending_response_tasks, return_exceptions=True
-                    )
+                    await asyncio.gather(*pending_response_tasks, return_exceptions=True)
                 try:
                     browser_cookies = await context.cookies(self.BASE_URL)
                     self._sync_browser_cookies(browser_cookies)
@@ -944,11 +1818,14 @@ class DouyinAPIClient:
             "post_pages": post_api_page_hits,
         }
         logger.warning(
-            "浏览器兜底采集 aweme_id: merged=%s, from_post_api=%s, selected=%s, post_items=%s",
+            "浏览器兜底采集 aweme_id: duration_ms=%s merged=%s from_post_api=%s "
+            "selected=%s post_items=%s post_pages=%s",
+            _elapsed_ms(browser_started),
             len(ids),
             len(post_api_ids),
             len(selected_ids),
             len(post_api_aweme_items),
+            post_api_page_hits,
         )
         return selected_ids
 
@@ -1019,12 +1896,8 @@ class DouyinAPIClient:
             logger.debug("Extract aweme_id from page failed: %s", exc)
         return []
 
-    async def _wait_for_manual_verification(
-        self, page, *, wait_timeout_seconds: int
-    ) -> None:
-        deadline = asyncio.get_running_loop().time() + max(
-            30, int(wait_timeout_seconds)
-        )
+    async def _wait_for_manual_verification(self, page, *, wait_timeout_seconds: int) -> None:
+        deadline = asyncio.get_running_loop().time() + max(30, int(wait_timeout_seconds))
         while asyncio.get_running_loop().time() < deadline:
             if page.is_closed():
                 logger.warning("Browser page closed while waiting manual verification")
@@ -1039,9 +1912,7 @@ class DouyinAPIClient:
                 return
             await page.wait_for_timeout(1000)
 
-        logger.warning(
-            "等待手动验证超时（%ss），继续按当前页面状态采集。", wait_timeout_seconds
-        )
+        logger.warning("等待手动验证超时（%ss），继续按当前页面状态采集。", wait_timeout_seconds)
 
     def _sync_browser_cookies(self, browser_cookies: List[Dict[str, Any]]) -> None:
         merged: Dict[str, str] = {}

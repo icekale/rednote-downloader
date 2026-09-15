@@ -18,11 +18,10 @@ from pydantic import BaseModel
 from auth import CookieManager
 from config import ConfigLoader
 from control import QueueManager, RateLimiter, RetryHandler
-from core import DouyinAPIClient, URLParser, DownloaderFactory
+from core import UNSUPPORTED_URL_TYPE_DETAIL, DouyinAPIClient, DownloaderFactory, URLParser
 from server.jobs import JobManager
 from storage import FileManager
 from utils.logger import setup_logger
-from utils.cookie_utils import parse_cookie_header
 from utils.validators import is_short_url, normalize_short_url
 
 logger = setup_logger("REST")
@@ -30,7 +29,6 @@ logger = setup_logger("REST")
 
 class DownloadRequest(BaseModel):
     url: str
-    cookie: str = ""
 
 
 class JobResponse(BaseModel):
@@ -50,43 +48,46 @@ class _ServerDeps:
 
     def __init__(self, config: ConfigLoader):
         self.config = config
-        self.cookie_manager = CookieManager()
-        self.cookie_manager.set_cookies(config.get_cookies())
+        # Resolve the cookie file path relative to the config file's directory
+        # so the sidecar can find it regardless of its working directory (which
+        # on macOS is often '/' when launched by Electron).
+        if config.config_path:
+            from pathlib import Path
+
+            cookie_file = str(Path(config.config_path).resolve().parent / ".cookies.json")
+        else:
+            cookie_file = ".cookies.json"
+        self.cookie_manager = CookieManager(cookie_file=cookie_file)
+        # Load cookies from the config (env var / YAML cookie key) first, then
+        # fall back to whatever is already on disk in the cookie file. This
+        # ensures that cookies saved by a previous session are picked up on
+        # restart even when the config doesn't embed them inline.
+        initial_cookies = config.get_cookies()
+        if initial_cookies:
+            self.cookie_manager.set_cookies(initial_cookies)
+        else:
+            # Trigger a load from disk so get_cookies() returns the persisted
+            # session without requiring a fresh login on every app restart.
+            self.cookie_manager.get_cookies()
         self.file_manager = FileManager(config.get("path"))
-        self.rate_limiter = RateLimiter(
-            max_per_second=float(config.get("rate_limit", 2) or 2)
-        )
-        self.retry_handler = RetryHandler(
-            max_retries=int(config.get("retry_times", 3) or 3)
-        )
-        self.queue_manager = QueueManager(
-            max_workers=int(config.get("thread", 5) or 5)
-        )
+        self.rate_limiter = RateLimiter(max_per_second=float(config.get("rate_limit", 2) or 2))
+        self.retry_handler = RetryHandler(max_retries=int(config.get("retry_times", 3) or 3))
+        self.queue_manager = QueueManager(max_workers=int(config.get("thread", 5) or 5))
 
 
-async def _execute_download(payload: Any, deps: "_ServerDeps") -> Dict[str, int]:
+async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
     """简化版 download_url：只负责执行并返回成功/失败计数。
 
     有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
     API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
     _ServerDeps 共享。
     """
-    if isinstance(payload, dict):
-        url = str(payload.get("url") or "")
-        request_cookie = str(payload.get("cookie") or "")
-    else:
-        url = str(payload or "")
-        request_cookie = ""
-
-    cookies = (
-        parse_cookie_header(request_cookie)
-        if request_cookie
-        else deps.cookie_manager.get_cookies()
-    )
-    cookie_manager = CookieManager()
-    cookie_manager.set_cookies(cookies)
-
-    async with DouyinAPIClient(cookie_manager.get_cookies()) as api_client:
+    # proxy 与 cli.main.download_url 对齐:API 请求、短链解析和 CDN 媒体
+    # 下载(downloader_base 读 api_client.proxy)统一走配置代理。
+    async with DouyinAPIClient(
+        deps.cookie_manager.get_cookies(),
+        proxy=deps.config.get("proxy"),
+    ) as api_client:
         if is_short_url(url):
             resolved = await api_client.resolve_short_url(normalize_short_url(url))
             if not resolved:
@@ -96,13 +97,17 @@ async def _execute_download(payload: Any, deps: "_ServerDeps") -> Dict[str, int]
         parsed = URLParser.parse(url)
         if not parsed:
             raise RuntimeError(f"Unsupported URL: {url}")
+        # 能力门禁：解析得出来但永远不会有下载器的类型，给出真实原因。
+        gated_detail = UNSUPPORTED_URL_TYPE_DETAIL.get(str(parsed.get("type") or ""))
+        if gated_detail:
+            raise RuntimeError(gated_detail)
 
         downloader = DownloaderFactory.create(
             parsed["type"],
             deps.config,
             api_client,
             deps.file_manager,
-            cookie_manager,
+            deps.cookie_manager,
             None,  # database 不在 server 场景里启用，避免单例冲突
             deps.rate_limiter,
             deps.retry_handler,
@@ -124,8 +129,8 @@ async def _execute_download(payload: Any, deps: "_ServerDeps") -> Dict[str, int]
 def build_app(config: ConfigLoader) -> FastAPI:
     deps = _ServerDeps(config)
 
-    async def executor(payload: Any) -> Dict[str, int]:
-        return await _execute_download(payload, deps)
+    async def executor(url: str) -> Dict[str, int]:
+        return await _execute_download(url, deps)
 
     server_cfg = config.get("server") or {}
     if not isinstance(server_cfg, dict):
@@ -161,11 +166,7 @@ def build_app(config: ConfigLoader) -> FastAPI:
     async def create_job(req: DownloadRequest) -> JobResponse:
         if not req.url:
             raise HTTPException(status_code=400, detail="url is required")
-        payload = {
-            "url": req.url,
-            "cookie": req.cookie or "",
-        }
-        job = await manager.submit(req.url, payload=payload)
+        job = await manager.submit(req.url)
         return JobResponse(job_id=job.job_id, status=job.status, url=job.url)
 
     @app.get("/api/v1/jobs/{job_id}")

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import parse_qs, unquote, urlparse
 
 import yaml
+
 from utils.cookie_utils import parse_cookie_header, sanitize_cookies
 
 DEFAULT_URL = "https://www.douyin.com/"
@@ -112,12 +113,8 @@ async def capture_cookies(args: argparse.Namespace) -> int:
 
         page.on("request", _on_request)
 
-        print(
-            "[INFO] Browser launched. Please complete Douyin login in the opened window."
-        )
-        print(
-            "[INFO] Press Enter in this terminal once the homepage shows you are logged in."
-        )
+        print("[INFO] Browser launched. Please complete Douyin login in the opened window.")
+        print("[INFO] Press Enter in this terminal once the homepage shows you are logged in.")
 
         await wait_for_login_confirmation(page, args.url)
 
@@ -143,9 +140,7 @@ async def capture_cookies(args: argparse.Namespace) -> int:
     picked = sanitize_cookies(picked)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(picked, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    args.output.write_text(json.dumps(picked, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[INFO] Saved {len(picked)} cookie(s) to {args.output.resolve()}")
 
     missing = REQUIRED_KEYS - picked.keys()
@@ -156,6 +151,31 @@ async def capture_cookies(args: argparse.Namespace) -> int:
         update_config(args.config, picked)
 
     return 0
+
+
+async def fetch_cookies(
+    *,
+    output: Path,
+    config: Optional[Path] = None,
+    url: str = DEFAULT_URL,
+    browser: str = "chromium",
+    headless: bool = False,
+    include_all: bool = False,
+) -> int:
+    """Parameterised entry to the manual-login cookie capture flow.
+
+    Thin wrapper around :func:`capture_cookies` so callers (e.g. the CLI
+    auto-relogin flow) don't have to fake an argparse.Namespace.
+    """
+    args = argparse.Namespace(
+        output=output,
+        config=config,
+        url=url,
+        browser=browser,
+        headless=headless,
+        include_all=include_all,
+    )
+    return await capture_cookies(args)
 
 
 def is_timeout_error(exc: Exception) -> bool:
@@ -188,9 +208,7 @@ async def goto_with_fallback(page: Any, url: str) -> str:
             f"falling back to {FALLBACK_WAIT_UNTIL}."
         )
     try:
-        await page.goto(
-            url, wait_until=FALLBACK_WAIT_UNTIL, timeout=FALLBACK_TIMEOUT_MS
-        )
+        await page.goto(url, wait_until=FALLBACK_WAIT_UNTIL, timeout=FALLBACK_TIMEOUT_MS)
         return FALLBACK_WAIT_UNTIL
     except Exception as exc:
         if is_target_closed_error(exc):
@@ -208,9 +226,7 @@ async def goto_with_fallback(page: Any, url: str) -> str:
         raise
 
 
-async def wait_for_login_confirmation(
-    page: Any, url: str, input_func: Any = input
-) -> None:
+async def wait_for_login_confirmation(page: Any, url: str, input_func: Any = input) -> None:
     # 页面导航放到后台执行，避免在导航等待期间终端无法响应 Enter。
     nav_task = asyncio.create_task(goto_with_fallback(page, url))
     # 让 nav_task 至少进入第一个 await 点。否则在某些调度时序下，
@@ -308,9 +324,7 @@ async def try_extract_ms_token(
             extra = extract_ms_token_from_text(text)
             if extra:
                 return extra
-            if len(text) <= 2048 and all(
-                ch not in text for ch in [";", " ", "\n", "\r", "\t"]
-            ):
+            if len(text) <= 2048 and all(ch not in text for ch in [";", " ", "\n", "\r", "\t"]):
                 return text
     except Exception:
         pass

@@ -1,9 +1,11 @@
 import re
-from typing import Optional, Dict, Any
-from utils.validators import parse_url_type
-from utils.logger import setup_logger
+from typing import Any, Dict, Optional, Tuple
+from urllib.parse import parse_qs, urlparse
 
-logger = setup_logger('URLParser')
+from utils.logger import setup_logger
+from utils.validators import parse_url_type
+
+logger = setup_logger("URLParser")
 
 
 class URLParser:
@@ -15,50 +17,61 @@ class URLParser:
             return None
 
         result = {
-            'original_url': url,
-            'type': url_type,
+            "original_url": url,
+            "type": url_type,
         }
 
-        if url_type == 'video':
+        if url_type == "video":
             aweme_id = URLParser._extract_video_id(url)
             if aweme_id:
-                result['aweme_id'] = aweme_id
+                result["aweme_id"] = aweme_id
 
-        elif url_type == 'user':
+        elif url_type == "user":
             sec_uid = URLParser._extract_user_id(url)
             if sec_uid:
-                result['sec_uid'] = sec_uid
+                result["sec_uid"] = sec_uid
 
-        elif url_type == 'collection':
+        elif url_type == "collection":
             mix_id = URLParser._extract_mix_id(url)
             if mix_id:
-                result['mix_id'] = mix_id
+                result["mix_id"] = mix_id
 
-        elif url_type == 'gallery':
+        elif url_type == "gallery":
             note_id = URLParser._extract_note_id(url)
             if note_id:
-                result['note_id'] = note_id
-                result['aweme_id'] = note_id
+                result["note_id"] = note_id
+                result["aweme_id"] = note_id
 
-        elif url_type == 'music':
+        elif url_type == "music":
             music_id = URLParser._extract_music_id(url)
             if music_id:
-                result['music_id'] = music_id
+                result["music_id"] = music_id
 
-        elif url_type == 'live':
-            room_id = URLParser._extract_room_id(url)
+        elif url_type == "live":
+            room_id, room_id_kind, sec_user_id = URLParser._extract_live_room(url)
             if room_id:
-                result['room_id'] = room_id
+                result["room_id"] = room_id
+                if room_id_kind == "room_id":
+                    result["room_id_kind"] = room_id_kind
+                if sec_user_id:
+                    result["sec_user_id"] = sec_user_id
+
+        elif url_type == "live_replay":
+            episode_id, replay_id = URLParser._extract_live_replay_ids(url)
+            if episode_id:
+                result["episode_id"] = episode_id
+            if replay_id:
+                result["replay_id"] = replay_id
 
         return result
 
     @staticmethod
     def _extract_video_id(url: str) -> Optional[str]:
-        match = re.search(r'/video/(\d+)', url)
+        match = re.search(r"/video/(\d+)", url)
         if match:
             return match.group(1)
 
-        match = re.search(r'modal_id=(\d+)', url)
+        match = re.search(r"modal_id=(\d+)", url)
         if match:
             return match.group(1)
 
@@ -66,30 +79,30 @@ class URLParser:
 
     @staticmethod
     def _extract_user_id(url: str) -> Optional[str]:
-        match = re.search(r'/user/([A-Za-z0-9_-]+)', url)
+        match = re.search(r"/user/([A-Za-z0-9_-]+)", url)
         if match:
             return match.group(1)
         return None
 
     @staticmethod
     def _extract_mix_id(url: str) -> Optional[str]:
-        match = re.search(r'/collection/(\d+)', url)
+        match = re.search(r"/collection/(\d+)", url)
         if not match:
-            match = re.search(r'/mix/(\d+)', url)
+            match = re.search(r"/mix/(\d+)", url)
         if match:
             return match.group(1)
         return None
 
     @staticmethod
     def _extract_note_id(url: str) -> Optional[str]:
-        match = re.search(r'/(?:note|gallery|slides)/(\d+)', url)
+        match = re.search(r"/(?:note|gallery|slides)/(\d+)", url)
         if match:
             return match.group(1)
         return None
 
     @staticmethod
     def _extract_music_id(url: str) -> Optional[str]:
-        match = re.search(r'/music/(\d+)', url)
+        match = re.search(r"/music/(\d+)", url)
         if match:
             return match.group(1)
         return None
@@ -99,10 +112,45 @@ class URLParser:
         # 直播链接形态：
         #   https://live.douyin.com/123456789
         #   https://www.douyin.com/follow/live/123456789
-        match = re.search(r'/live/(\d+)', url)
-        if match:
-            return match.group(1)
-        match = re.search(r'live\.douyin\.com/(\d+)', url)
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        pattern = r"/(\d+)/?" if host == "live.douyin.com" else r"/(?:follow/|share/)?live/(\d+)/?"
+        match = re.fullmatch(pattern, parsed.path)
         if match:
             return match.group(1)
         return None
+
+    @staticmethod
+    def _extract_live_room(url: str) -> Tuple[Optional[str], str, Optional[str]]:
+        parsed = urlparse(url)
+        if (parsed.hostname or "").lower() == "webcast.amemv.com":
+            match = re.fullmatch(r"/douyin/webcast/reflow/(\d+)/?", parsed.path)
+            if match:
+                sec_user_ids = parse_qs(parsed.query).get("sec_user_id", [])
+                sec_user_id = sec_user_ids[0].strip() if sec_user_ids else None
+                return match.group(1), "room_id", sec_user_id or None
+        return URLParser._extract_room_id(url), "web_rid", None
+
+    @staticmethod
+    def _extract_live_replay_ids(url: str) -> Tuple[Optional[str], Optional[str]]:
+        # 直播回放链接形态：
+        #   https://www.douyin.com/vsdetail/7331203341890049058
+        #   https://webcast.amemv.com/douyin/webcast/reflow/episode/733...?replay_id=734...
+        parsed = urlparse(url)
+        path = parsed.path
+        episode_id: Optional[str] = None
+        replay_id: Optional[str] = None
+
+        if path.startswith("/vsdetail/"):
+            match = re.match(r"^/vsdetail/(\d+)(?:/|$)", path)
+            if match:
+                episode_id = match.group(1)
+        elif path.startswith("/douyin/webcast/reflow/episode/"):
+            match = re.match(r"^/douyin/webcast/reflow/episode/(\d+)(?:/|$)", path)
+            if match:
+                episode_id = match.group(1)
+
+        replay_ids = parse_qs(parsed.query).get("replay_id", [])
+        if replay_ids and replay_ids[0].strip().isdigit():
+            replay_id = replay_ids[0].strip()
+        return episode_id, replay_id

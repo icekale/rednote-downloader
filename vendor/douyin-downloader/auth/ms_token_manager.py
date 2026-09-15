@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import string
@@ -7,9 +8,11 @@ import time
 import urllib.request
 from http.cookies import SimpleCookie
 from threading import Lock
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import yaml
+
+from auth.ms_token_conf import BUNDLED_MS_TOKEN_CONF
 from utils.logger import setup_logger
 
 logger = setup_logger("MsTokenManager")
@@ -22,23 +25,40 @@ class MsTokenManager:
     2) 失败时回退到随机 msToken，保证请求参数完整
     """
 
-    F2_CONF_URL = (
-        "https://raw.githubusercontent.com/Johnserf-Seed/f2/main/f2/conf/conf.yaml"
-    )
+    F2_CONF_URL = "https://raw.githubusercontent.com/Johnserf-Seed/f2/main/f2/conf/conf.yaml"
+    _REQUIRED_CONF_KEYS = frozenset({"url", "magic", "version", "dataType", "ulr", "strData"})
+    # Config cache is class-level on purpose: ``DouyinAPIClient`` (and with it
+    # this manager) is rebuilt per request in the sidecar, so per-instance
+    # state would re-fetch the remote file for every token refresh. It is
+    # keyed per class, not per ``conf_url``; every caller uses the default.
     _cached_conf: Optional[Dict[str, Any]] = None
     _cached_at: float = 0
     _cache_ttl_seconds: int = 3600
+    _remote_conf_retry_after: float = 0.0
     _lock = Lock()
+
+    # Token generation is optional: every caller already has a random-token
+    # fallback. Keep this dependency on GitHub + mssdk inside a small latency
+    # budget so an unavailable upstream cannot hold an API request past the
+    # renderer's timeout. The cross-instance lock prevents short-lived API
+    # clients from stampeding those two endpoints; after one failed attempt,
+    # all callers use the fallback during the cooldown.
+    _default_timeout_seconds: float = 3.0
+    _failure_backoff_seconds: float = 300.0
+    _generation_retry_after: float = 0.0
+    _generated_token_ttl_seconds: float = 60.0
+    _generated_tokens: Dict[str, Tuple[float, str]] = {}
+    _generation_lock = Lock()
 
     def __init__(
         self,
         user_agent: str,
         conf_url: Optional[str] = None,
-        timeout_seconds: int = 15,
+        timeout_seconds: float = _default_timeout_seconds,
     ):
         self.user_agent = user_agent
         self.conf_url = conf_url or self.F2_CONF_URL
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = max(0.1, float(timeout_seconds))
 
     @classmethod
     def _is_valid_ms_token(cls, token: Optional[str]) -> bool:
@@ -50,24 +70,60 @@ class MsTokenManager:
     @classmethod
     def gen_false_ms_token(cls) -> str:
         token = (
-            "".join(
-                random.choice(string.ascii_letters + string.digits) for _ in range(182)
-            )
-            + "=="
+            "".join(random.choice(string.ascii_letters + string.digits) for _ in range(182)) + "=="
         )
         logger.debug("Generated fallback msToken")
         return token
+
+    def _cookie_scope_key(self, cookies: Dict[str, str]) -> str:
+        payload = json.dumps(
+            {"cookies": cookies or {}, "user_agent": self.user_agent},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def ensure_ms_token(self, cookies: Dict[str, str]) -> str:
         current = (cookies or {}).get("msToken", "").strip()
         if current:
             return current
 
-        real = self.gen_real_ms_token()
-        if real:
-            return real
+        # ``DouyinAPIClient`` instances are intentionally short-lived in the
+        # sidecar. Serialize generation across them and re-check shared state
+        # after taking the lock, otherwise a burst of cache/list requests can
+        # launch one slow remote probe per instance.
+        scope_key = self._cookie_scope_key(cookies)
+        with self._generation_lock:
+            now = time.monotonic()
+            expired_keys = [
+                key
+                for key, (expires_at, _token) in self._generated_tokens.items()
+                if expires_at <= now
+            ]
+            for key in expired_keys:
+                self._generated_tokens.pop(key, None)
 
-        return self.gen_false_ms_token()
+            cached = self._generated_tokens.get(scope_key)
+            if cached is not None:
+                return cached[1]
+            if now < self._generation_retry_after:
+                return self.gen_false_ms_token()
+
+            real = self.gen_real_ms_token()
+            if real:
+                type(self)._generation_retry_after = 0.0
+                self._generated_tokens[scope_key] = (
+                    time.monotonic() + self._generated_token_ttl_seconds,
+                    real,
+                )
+                return real
+
+            type(self)._generation_retry_after = time.monotonic() + self._failure_backoff_seconds
+            logger.warning(
+                "Real msToken unavailable; using random fallback for %.0fs",
+                self._failure_backoff_seconds,
+            )
+            return self.gen_false_ms_token()
 
     def gen_real_ms_token(self) -> Optional[str]:
         conf = self._load_f2_ms_token_conf()
@@ -100,51 +156,77 @@ class MsTokenManager:
                 logger.debug("Generated real msToken via mssdk endpoint")
                 return token
             if token:
-                logger.warning(
-                    "Generated msToken has unexpected length: %s", len(token.strip())
-                )
+                logger.warning("Generated msToken has unexpected length: %s", len(token.strip()))
             return None
         except Exception as exc:
             logger.warning("Failed to generate real msToken: %s", exc)
             return None
 
     def _load_f2_ms_token_conf(self) -> Optional[Dict[str, Any]]:
+        """Return the msToken generation config, preferring the live F2 copy.
+
+        The remote file lives on raw.githubusercontent.com, which many users
+        cannot reach inside the probe budget. Without a fallback every client
+        on such a network degraded to a random token, and Douyin now answers
+        HTTP 403 to ``/aweme/post/`` after a few pages with one, so profile
+        downloads stopped early. When a refresh fails, the last remote copy
+        (newer than the snapshot by construction) is reused, and only a
+        process that never reached GitHub falls back to the bundled snapshot.
+        A remote failure is remembered for ``_failure_backoff_seconds`` so
+        callers do not pay the timeout on every token refresh.
+        """
+        cls = type(self)
         now = time.time()
         with self._lock:
-            if self._cached_conf and (now - self._cached_at) < self._cache_ttl_seconds:
-                return self._cached_conf
+            if cls._cached_conf and (now - cls._cached_at) < self._cache_ttl_seconds:
+                return cls._cached_conf
+            if time.monotonic() < cls._remote_conf_retry_after:
+                return cls._cached_conf or self._bundled_conf()
 
+        remote = self._fetch_remote_conf()
+        with self._lock:
+            if remote is not None:
+                cls._cached_conf = remote
+                cls._cached_at = now
+                cls._remote_conf_retry_after = 0.0
+                return remote
+            cls._remote_conf_retry_after = time.monotonic() + self._failure_backoff_seconds
+            stale = cls._cached_conf
+        logger.info(
+            "Remote F2 msToken config unavailable; using %s copy, retry in %.0fs",
+            "last fetched" if stale else "bundled",
+            self._failure_backoff_seconds,
+        )
+        return stale or self._bundled_conf()
+
+    def _fetch_remote_conf(self) -> Optional[Dict[str, Any]]:
         try:
-            with urllib.request.urlopen(
-                self.conf_url, timeout=self.timeout_seconds
-            ) as resp:
+            with urllib.request.urlopen(self.conf_url, timeout=self.timeout_seconds) as resp:
                 raw = resp.read().decode("utf-8")
             data = yaml.safe_load(raw) or {}
             ms_conf = (
                 data.get("f2", {}).get("douyin", {}).get("msToken", {})  # type: ignore[union-attr]
             )
-
-            required = {"url", "magic", "version", "dataType", "ulr", "strData"}
-            if not required.issubset(ms_conf.keys()):
-                logger.warning(
-                    "F2 msToken config incomplete, missing: %s",
-                    sorted(required - set(ms_conf.keys())),
-                )
-                return None
-
-            with self._lock:
-                self._cached_conf = ms_conf
-                self._cached_at = now
-            return ms_conf
         except Exception as exc:
             logger.warning("Failed to load F2 msToken config: %s", exc)
             return None
 
+        if not isinstance(ms_conf, dict):
+            logger.warning("F2 msToken config is not a mapping: %s", type(ms_conf).__name__)
+            return None
+        missing = self._REQUIRED_CONF_KEYS - set(ms_conf.keys())
+        if missing:
+            logger.warning("F2 msToken config incomplete, missing: %s", sorted(missing))
+            return None
+        return ms_conf
+
+    @staticmethod
+    def _bundled_conf() -> Dict[str, Any]:
+        return dict(BUNDLED_MS_TOKEN_CONF)
+
     @staticmethod
     def _extract_ms_token_from_headers(headers: Any) -> Optional[str]:
-        set_cookies = (
-            headers.get_all("Set-Cookie") if hasattr(headers, "get_all") else []
-        )
+        set_cookies = headers.get_all("Set-Cookie") if hasattr(headers, "get_all") else []
         for header in set_cookies or []:
             cookie = SimpleCookie()
             cookie.load(header)

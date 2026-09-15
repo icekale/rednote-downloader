@@ -1,23 +1,7 @@
 """文件/目录命名模板渲染。
 
-用户可在设置里自定义 `filename_template` 与 `folder_template`，此处把模板中
-``{var}`` 形式的占位符替换成上下文变量，未知变量会被保留成空字符串（而非抛错），
-这样即使用户输入轻微笔误也不会导致下载失败。渲染结果最终仍会走
-``utils.validators.sanitize_filename``，因此模板里出现的路径分隔符、非法字符会
-被统一清洗——模板语言本身不需要做安全校验。
-
-仅允许的变量（详见 ``ALLOWED_VARIABLES``）：
-  - ``id``: 作品 ID（视频/图集为 ``aweme_id``，音乐为 ``music_<music_id>``，
-    直播为 ``room_id``）
-  - ``title``: 作品标题或描述，空时为 ``no_title``
-  - ``author``: 作者昵称
-  - ``author_id``: 作者 sec_uid（便于同名区分，缺失为空）
-  - ``date``: 发布日期 ``YYYY-MM-DD``（缺失时为当前日期）
-  - ``year`` / ``month`` / ``day``: ``date`` 的年月日分量
-  - ``time``: 发布时间 ``HHMM``（仅当上下文提供时有值）
-  - ``timestamp``: Unix 时间戳（秒，整型字符串；缺失为空）
-  - ``type``: ``video`` / ``gallery`` / ``music`` / ``live``
-  - ``mode``: 下载模式 ``post`` / ``like`` / ``mix`` / ``music`` / ``live`` …
+模板仅接受 ``ALLOWED_VARIABLES`` 中的 ``{var}`` 占位符；缺失值渲染为空字符串。
+最终结果统一交给 ``sanitize_filename`` 清理非法字符并限制长度。
 """
 
 from __future__ import annotations
@@ -39,6 +23,9 @@ ALLOWED_VARIABLES = (
     "month",
     "day",
     "time",
+    "hour",
+    "minute",
+    "second",
     "timestamp",
     "type",
     "mode",
@@ -51,6 +38,8 @@ DEFAULT_FOLDER_TEMPLATE = "{date}_{title}_{id}"
 
 # 模板长度上限。既防用户贴进整段长文案，也给前端做一致校验。
 MAX_TEMPLATE_LENGTH = 200
+RENDERED_NAME_MAX_LENGTH = 80
+_SANITIZE_WITHOUT_TRUNCATION_LENGTH = 10_000
 
 # 匹配 ``{var}`` 形式。不支持格式化说明符（:fmt）以降低心智负担。
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
@@ -58,6 +47,52 @@ _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 class TemplateValidationError(ValueError):
     """模板语法或变量不合法。"""
+
+
+def _render_template_raw(
+    template: str,
+    context: Mapping[str, Any],
+    *,
+    title_override: Optional[str] = None,
+) -> str:
+    def replace(match: "re.Match[str]") -> str:
+        name = match.group(1)
+        if name == "title" and title_override is not None:
+            return title_override
+        value = context.get(name)
+        return "" if value is None else str(value)
+
+    return _PLACEHOLDER_RE.sub(replace, template)
+
+
+def _clean_without_truncation(raw: str) -> str:
+    return sanitize_filename(raw, max_length=_SANITIZE_WITHOUT_TRUNCATION_LENGTH)
+
+
+def _shrink_title_to_fit(template: str, context: Mapping[str, Any]) -> Optional[str]:
+    if "{title}" not in template:
+        return None
+    raw_title = context.get("title")
+    if raw_title in (None, ""):
+        return None
+
+    title = str(raw_title)
+    empty_title = _clean_without_truncation(
+        _render_template_raw(template, context, title_override="")
+    )
+    best = empty_title if len(empty_title) <= RENDERED_NAME_MAX_LENGTH else None
+    low, high = 0, len(title)
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = _clean_without_truncation(
+            _render_template_raw(template, context, title_override=title[:mid])
+        )
+        if len(candidate) <= RENDERED_NAME_MAX_LENGTH:
+            best = candidate
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best
 
 
 def validate_template(template: str, *, field_name: str = "template") -> None:
@@ -71,8 +106,11 @@ def validate_template(template: str, *, field_name: str = "template") -> None:
       - 不得只包含空白或空串
       - 至少引用一个允许变量（防止用户写成纯静态常量导致不同作品互相覆盖）
       - 引用的变量必须在 ``ALLOWED_VARIABLES`` 白名单内
-      - 必须引用 ``{id}`` —— 保证跨作品唯一性（否则同一作者同一天的两条作品
-        会因为 stem 相同而彼此覆盖）
+
+    注意：``{id}`` **不再强制**。用户可选择不含作品 ID 的模板（例如用
+    ``{date} {hour}.{minute}.{second}_{title}_{type}`` 复刻 legacy 布局）。代价是
+    基于文件名的磁盘判重会失效：默认 ``redownload_missing_files=true`` 时会再次下载；
+    关闭该开关后，才会在数据库仍有有效下载记录时继续跳过。
     """
     if not isinstance(template, str):
         raise TemplateValidationError(f"{field_name} must be a string")
@@ -82,9 +120,7 @@ def validate_template(template: str, *, field_name: str = "template") -> None:
         raise TemplateValidationError(f"{field_name} must not be empty")
 
     if len(template) > MAX_TEMPLATE_LENGTH:
-        raise TemplateValidationError(
-            f"{field_name} must be <= {MAX_TEMPLATE_LENGTH} characters"
-        )
+        raise TemplateValidationError(f"{field_name} must be <= {MAX_TEMPLATE_LENGTH} characters")
 
     if "/" in template or "\\" in template:
         raise TemplateValidationError(
@@ -105,11 +141,6 @@ def validate_template(template: str, *, field_name: str = "template") -> None:
             + f"; allowed: {', '.join(ALLOWED_VARIABLES)}"
         )
 
-    if "id" not in variables:
-        raise TemplateValidationError(
-            f"{field_name} must reference {{id}} to guarantee uniqueness"
-        )
-
 
 def render_template(
     template: str,
@@ -124,13 +155,15 @@ def render_template(
     ``fallback`` 进一步兜底。
     """
 
-    def replace(match: "re.Match[str]") -> str:
-        name = match.group(1)
-        value = context.get(name)
-        return "" if value is None else str(value)
-
-    rendered = _PLACEHOLDER_RE.sub(replace, template)
-    cleaned = sanitize_filename(rendered)
+    rendered = _render_template_raw(template, context)
+    untruncated = _clean_without_truncation(rendered)
+    if len(untruncated) <= RENDERED_NAME_MAX_LENGTH:
+        cleaned = untruncated
+    else:
+        cleaned = _shrink_title_to_fit(template, context) or sanitize_filename(
+            rendered,
+            max_length=RENDERED_NAME_MAX_LENGTH,
+        )
     if cleaned == "untitled" and fallback:
         return sanitize_filename(fallback)
     return cleaned
@@ -144,6 +177,21 @@ def _split_date(date_str: str) -> Dict[str, str]:
     if len(parts) != 3:
         return {"year": "", "month": "", "day": ""}
     return {"year": parts[0], "month": parts[1], "day": parts[2]}
+
+
+def _split_time(ts: Optional[int]) -> Dict[str, str]:
+    """把 Unix 时间戳拆成 ``{hour, minute, second}`` 三个两位字符串。"""
+    if not ts:
+        return {"hour": "", "minute": "", "second": ""}
+    try:
+        dt = datetime.fromtimestamp(ts)
+        return {
+            "hour": dt.strftime("%H"),
+            "minute": dt.strftime("%M"),
+            "second": dt.strftime("%S"),
+        }
+    except (OSError, OverflowError, ValueError):
+        return {"hour": "", "minute": "", "second": ""}
 
 
 def build_aweme_context(
@@ -165,6 +213,9 @@ def build_aweme_context(
         "author_id": author_sec_uid or "",
         "date": publish_date or "",
         "time": "",
+        "hour": "",
+        "minute": "",
+        "second": "",
         "timestamp": str(publish_ts) if publish_ts else "",
         "type": media_type or "",
         "mode": mode or "",
@@ -177,6 +228,7 @@ def build_aweme_context(
             ctx["time"] = datetime.fromtimestamp(publish_ts).strftime("%H%M")
         except (OSError, OverflowError, ValueError):
             ctx["time"] = ""
+        ctx.update(_split_time(publish_ts))
     return ctx
 
 
@@ -196,6 +248,9 @@ def build_music_context(
         "author_id": "",
         "date": publish_date or "",
         "time": "",
+        "hour": "",
+        "minute": "",
+        "second": "",
         "timestamp": "",
         "type": "music",
         "mode": mode,
@@ -217,7 +272,7 @@ def build_live_context(
     ``date`` 特意保留为 ``YYYY-MM-DD_HHMM``（保留历史行为：同一天可能录多次
     直播，需要在文件名层面区分）。``year``/``month``/``day`` 仍按自然日拆分，
     方便按月/按日分文件夹。``time`` 单独提供 ``HHMM`` 方便用户在模板里改放到
-    其他位置。
+    其他位置。``hour``/``minute``/``second`` 提供独立的时/分/秒分量。
     """
     iso_date = started_at.strftime("%Y-%m-%d")
     date_with_time = started_at.strftime("%Y-%m-%d_%H%M")
@@ -228,6 +283,9 @@ def build_live_context(
         "author_id": "",
         "date": date_with_time,
         "time": started_at.strftime("%H%M"),
+        "hour": started_at.strftime("%H"),
+        "minute": started_at.strftime("%M"),
+        "second": started_at.strftime("%S"),
         "timestamp": str(int(started_at.timestamp())),
         "type": "live",
         "mode": mode,

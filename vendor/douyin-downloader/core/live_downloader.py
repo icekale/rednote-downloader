@@ -66,7 +66,13 @@ class LiveDownloader(BaseDownloader):
         self._progress_set_item_total(1, "直播录制")
         self._progress_update_step("获取直播间信息", f"room_id={room_id}")
 
-        info = await self.api_client.get_live_room_info(str(room_id))
+        request_kwargs: Dict[str, str] = {}
+        if parsed_url.get("room_id_kind") == "room_id":
+            request_kwargs = {
+                "room_id_kind": "room_id",
+                "sec_user_id": str(parsed_url.get("sec_user_id") or ""),
+            }
+        info = await self.api_client.get_live_room_info(str(room_id), **request_kwargs)
         if not info:
             logger.error("Live room not available or fetch failed: %s", room_id)
             result.failed += 1
@@ -79,9 +85,7 @@ class LiveDownloader(BaseDownloader):
         status = room.get("status")
         if status is not None and int(status or 0) != 2:
             # 2 = 正在直播；其他状态不录
-            logger.warning(
-                "Room %s not live (status=%s); skipping", room_id, status
-            )
+            logger.warning("Room %s not live (status=%s); skipping", room_id, status)
             result.skipped += 1
             self._progress_advance_item("skipped", str(room_id))
             return result
@@ -151,9 +155,7 @@ class LiveDownloader(BaseDownloader):
         cfg = self.config.get("live") or {}
         return cfg if isinstance(cfg, dict) else {}
 
-    def _plan_output_paths(
-        self, author_name: str, title: str, room_id: str
-    ) -> Tuple[Path, str]:
+    def _plan_output_paths(self, author_name: str, title: str, room_id: str) -> Tuple[Path, str]:
         started_at = datetime.now()
         date = started_at.strftime("%Y-%m-%d_%H%M")
         template_context = build_live_context(
@@ -162,12 +164,8 @@ class LiveDownloader(BaseDownloader):
             author_name=author_name,
             started_at=started_at,
         )
-        filename_template = (
-            self.config.get("filename_template") or DEFAULT_FILE_TEMPLATE
-        )
-        folder_template = (
-            self.config.get("folder_template") or DEFAULT_FOLDER_TEMPLATE
-        )
+        filename_template = self.config.get("filename_template") or DEFAULT_FILE_TEMPLATE
+        folder_template = self.config.get("folder_template") or DEFAULT_FOLDER_TEMPLATE
         file_stem = render_template(
             filename_template,
             template_context,
@@ -178,6 +176,9 @@ class LiveDownloader(BaseDownloader):
             template_context,
             fallback=f"{date}_{room_id}",
         )
+        # 让「打开输出文件夹」落到该作者目录而不是下载根目录。
+        author_dir_style = self.config.get("author_dir") or "nickname"
+        self._report_author_output_dir(author_name, None, author_dir_style)
         save_dir = self.file_manager.get_save_path(
             author_name=author_name,
             mode="live",
@@ -186,6 +187,9 @@ class LiveDownloader(BaseDownloader):
             folderstyle=self.config.get("folderstyle", True),
             download_date=date,
             folder_name=folder_name,
+            author_sec_uid=None,
+            author_dir_style=author_dir_style,
+            group_by_mode=self.config.get("group_by_mode", True),
         )
         return save_dir, file_stem
 
@@ -283,9 +287,7 @@ class LiveDownloader(BaseDownloader):
                 timeout=aiohttp.ClientTimeout(total=None, sock_read=idle_timeout),
             ) as resp:
                 if resp.status != 200:
-                    logger.error(
-                        "Live stream HTTP %s for %s", resp.status, target_path.name
-                    )
+                    logger.error("Live stream HTTP %s for %s", resp.status, target_path.name)
                     return False
                 async with aiofiles.open(tmp_path, "wb") as f:
                     async for chunk in resp.content.iter_chunked(chunk_size):
@@ -312,9 +314,7 @@ class LiveDownloader(BaseDownloader):
             return _promote_if_nonempty("payload ended")
         except (asyncio.TimeoutError, aiohttp.ServerTimeoutError) as exc:
             # sock_read 空闲超时——多数情况是主播停止推流，保留已录数据
-            logger.info(
-                "Live stream idle timeout after %ss: %s", idle_timeout, exc
-            )
+            logger.info("Live stream idle timeout after %ss: %s", idle_timeout, exc)
             return _promote_if_nonempty("idle timeout")
         except Exception as exc:
             logger.error("Live stream recording failed: %s", exc)

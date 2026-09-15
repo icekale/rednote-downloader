@@ -1,10 +1,11 @@
 import asyncio
-from typing import List, Callable, Any, TypeVar
+from typing import Any, Callable, List, TypeVar
+
 from utils.logger import setup_logger
 
-logger = setup_logger('QueueManager')
+logger = setup_logger("QueueManager")
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class QueueManager:
