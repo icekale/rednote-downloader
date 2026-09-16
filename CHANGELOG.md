@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.26 - 2026-09-16
+
 - Refresh the bundled `jiji262/douyin-downloader` vendor snapshot to upstream HEAD, picking up the 2026-09 Argus gate fixes for the `aweme/detail` endpoint (Douyin now rejects unsigned and cookieless requests with an empty 200, which surfaced as "missing aweme_detail").
 - Add a server-side Douyin Cookie setting to the web UI settings tab. The saved cookie is persisted in the app config, masked in API responses, and used for Douyin downloads with precedence request cookie > saved cookie > `DOUYIN_COOKIE` env.
 

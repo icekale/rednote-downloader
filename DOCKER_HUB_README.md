@@ -24,7 +24,7 @@ docker run -d \
   -e PUID="$(id -u)" \
   -e PGID="$(id -g)" \
   -v "$(pwd)/data:/data" \
-  icekale/rednote-downloader:v0.2.25
+  icekale/rednote-downloader:v0.2.26
 ```
 
 启动后打开：
