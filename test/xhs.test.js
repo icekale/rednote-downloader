@@ -93,6 +93,68 @@ test('fetchNotePage accepts xhslink.cn short URLs', async () => {
   }
 });
 
+test('fetchNotePage retries with a mobile UA when the desktop flow lands on the login page', async () => {
+  const originalFetch = global.fetch;
+  const loginUrl = 'https://www.xiaohongshu.com/login?redirectPath=http%3A%2F%2Fwww.xiaohongshu.com%2Fdiscover';
+  const noteHtml = `<html><script>window.__INITIAL_STATE__=${JSON.stringify({
+    note: {
+      noteDetailMap: {
+        'abc123': {
+          note: {
+            noteId: 'abc123',
+            title: 'mobile fallback note',
+            desc: 'desc',
+            type: 'video',
+            user: { userId: 'u1', nickname: 'author' },
+            video: {
+              media: { videoId: 'v1' },
+              videoUrl: 'https://sns-video.xhscdn.com/v1.mp4',
+            },
+          },
+        },
+      },
+    },
+  })}<\/script></html>`;
+  const calls = [];
+
+  global.fetch = async (input, init = {}) => {
+    const url = input.toString();
+    const ua = init.headers?.['User-Agent'] || '';
+    calls.push({ url, ua, cookie: init.headers?.Cookie || '' });
+    if (url === 'https://xhslink.cn/a/abc123') {
+      return {
+        ok: true,
+        status: 302,
+        headers: new Map([['location', 'https://www.xiaohongshu.com/discovery/item/abc123?xsec_token=CBtoken%3D&type=video']]),
+      };
+    }
+    if (new URL(url).pathname === '/login') {
+      return { ok: true, status: 200, headers: new Map(), text: async () => '<html>login page</html>' };
+    }
+    // The note page itself: desktop UA gets gated to the login page, mobile renders.
+    if (ua.startsWith('Mozilla/5.0 (iPhone')) {
+      return { ok: true, status: 200, headers: new Map(), text: async () => noteHtml };
+    }
+    return {
+      ok: true,
+      status: 302,
+      headers: new Map([['location', loginUrl]]),
+    };
+  };
+
+  try {
+    const result = await fetchNotePage('https://xhslink.cn/a/abc123', { cookie: 'stale-cookie=1' });
+    assert.equal(new URL(result.resolvedUrl).pathname, '/discovery/item/abc123');
+    assert.equal(calls.length, 5);
+    assert.equal(calls[0].ua.startsWith('Mozilla/5.0 (iPhone'), false);
+    assert.equal(calls[2].url.includes('/login'), true);
+    assert.ok(calls[3].ua.startsWith('Mozilla/5.0 (iPhone'), `mobile UA expected, got ${calls[3].ua}`);
+    assert.equal(calls[4].cookie, '');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('deriveOriginalImageUrl converts preview URL into ci download URL', () => {
   const input = 'http://sns-webpic-qc.xhscdn.com/202401011200/abcd1234/image-token!nd_dft_wlteh_webp_3';
   assert.equal(

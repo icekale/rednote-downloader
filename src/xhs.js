@@ -41,6 +41,10 @@ const MEDIA_HOST_SUFFIXES = [
 const DEFAULT_TIMEOUT_MS = Number.parseInt(process.env.REQUEST_TIMEOUT_MS || '15000', 10);
 const DEFAULT_MEDIA_TIMEOUT_MS = Number.parseInt(process.env.MEDIA_REQUEST_TIMEOUT_MS || '30000', 10);
 const DEFAULT_TWITTER_TIMEOUT_MS = Number.parseInt(process.env.TWITTER_REQUEST_TIMEOUT_MS || '30000', 10);
+// Xiaohongshu 302s desktop-UA visitors to /login on some note pages (e.g.
+// /discovery/item/ video notes) even with a cookie; the mobile web renders the
+// same note anonymously, so the fetcher falls back to this UA.
+const XHS_MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 const DEFAULT_DOWNLOAD_CONCURRENCY = normalizePositiveInt(process.env.MEDIA_DOWNLOAD_CONCURRENCY, 3);
 const DEFAULT_MEDIA_DOWNLOAD_RETRY_COUNT = (() => {
   const value = Number.parseInt(process.env.MEDIA_DOWNLOAD_RETRY_COUNT || '1', 10);
@@ -580,8 +584,33 @@ export function parseNoteFromHtml(html, noteUrl) {
 }
 
 export async function fetchNotePage(input, options = {}) {
+  const first = await fetchNotePageWithUa(input, options);
+
+  if (!isXhsLoginPageUrl(first.resolvedUrl)) {
+    return first;
+  }
+
+  return fetchNotePageWithUa(input, options, XHS_MOBILE_UA);
+}
+
+function isXhsLoginPageUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.endsWith('xiaohongshu.com') && parsed.pathname === '/login';
+  } catch {
+    return false;
+  }
+}
+
+async function fetchNotePageWithUa(input, options = {}, userAgentOverride = '') {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
   const headers = buildHeaders('https://www.xiaohongshu.com/', options.cookie || process.env.XHS_COOKIE);
+  if (userAgentOverride) {
+    headers['User-Agent'] = userAgentOverride;
+    // The mobile retry targets the anonymous render; a stale desktop cookie
+    // only re-triggers the gating this retry exists to bypass.
+    delete headers.Cookie;
+  }
   let current = ensureAllowedShareUrl(extractFirstUrl(input));
 
   for (let hop = 0; hop < 8; hop += 1) {
