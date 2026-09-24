@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.27 - 2026-09-25
+
+- Fall back to a mobile User-Agent when the Xiaohongshu note page redirects the desktop flow to the login page (recently applied to `/discovery/item/` video notes); the mobile web renders the same note anonymously, so `xhslink.cn/o/...` share links resolve again.
 
 ## v0.2.26 - 2026-09-16
 
